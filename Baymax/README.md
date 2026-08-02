@@ -27,19 +27,66 @@ python manage.py runserver
 
 4. Open `http://127.0.0.1:8000/` in your browser
 
-## How It Works
+## Routes
 
-1. Upload a CSV or Excel file
-2. Ask a question like "What is the average sales?" or "Show top 10 rows"
-3. Get an answer
+| URL | Method | Description |
+|-----|--------|-------------|
+| `/` | GET | Home page |
+| `/upload/` | GET | Upload form page |
+| `/upload/` | POST | Upload CSV/Excel file (multipart/form-data, field: `data_file`) |
+| `/upload/ask/` | GET | Ask questions page (requires upload first) |
+| `/upload/ask/` | POST | Ask a question (JSON body: `{"query": "..."}`) |
 
-## Supported Questions
+## API Details
 
-- Lookup: "Find row with id 5"
-- Count: "How many rows have status = active?"
-- Search: "Find rows containing 'python'"
-- Aggregates: "What is the total revenue?"
-- Text: "What is the longest sentence in column name?"
-- Trends: "Is salary increasing over time?"
-- Outliers: "Are there outliers in the price column?"
-- Summary: "Give me overview of the dataset"
+### Upload File
+
+```
+POST /upload/
+Content-Type: multipart/form-data
+
+Body: data_file = <your CSV or Excel file>
+```
+
+Response:
+```json
+{
+  "status": "success",
+  "message": "Loaded 500 rows, 8 columns.",
+  "redirect_url": "/upload/ask/"
+}
+```
+
+### Ask Question
+
+```
+POST /upload/ask/
+Content-Type: application/json
+
+Body: {"query": "What is the average sales?"}
+```
+
+Response: Server-Sent Events (SSE) stream with these event types:
+- `thinking` — processing status
+- `code` — generated pandas code
+- `result` — final answer
+
+## Example Questions
+
+- "What is the average of column X?"
+- "Show top 10 rows"
+- "How many rows have status = active?"
+- "Find rows containing 'python'"
+- "What is the total revenue?"
+- "What is the longest text in column name?"
+- "Is salary increasing over time?"
+- "Are there outliers in the price column?"
+- "Give me overview of the dataset"
+
+## Supported Files
+
+- `.csv` — CSV files
+- `.xlsx` — Excel files
+- `.xls` — Legacy Excel files
+
+Max file size: 100MB
