@@ -1,15 +1,33 @@
-# Ignore database files
+# Database
 db.sqlite3
 user_data.db
-Baymax/db.sqlite3
-Baymax/user_data.db
 *.sqlite3
 *.db
-# Ignore all .env files
+
+# Environment / Secrets
 .env
-Baymax/.env
-.aider*
-.env
-*.env
 .env.local
 .env.production
+*.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs
+*.log
+
+# Media (generated uploads)
+media/
+
+# IDE / Tools
+.aider*
+.vercel/
+
+# Claude
+claude
+
+# Windows reserved names
+nul
+NUL
