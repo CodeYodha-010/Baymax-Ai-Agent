@@ -1,42 +1,45 @@
 # Baymax AI Agent
 
-AI-powered data analysis tool. Upload CSV/Excel files and ask questions in natural language.
+Ask questions about your CSV/Excel data in plain English. Get answers powered by AI.
 
-## Features
-
-- Natural language queries on your data
-- Auto-generates and executes Python/pandas code via LLM
-- Streaming responses with thinking process
-- CSV and Excel file support (up to 100MB)
-- Session-based data persistence
-- DuckDB integration for large datasets
-
-## Setup
+## Quick Start
 
 ```bash
+git clone https://github.com/CodeYodha-010/Baymax-Ai-Agent.git
+cd Baymax-Ai-Agent/Baymax
 pip install -r requirements.txt
-cp .env.example .env   # add your OpenRouter API key
+```
+
+## Add Your API Key
+
+1. Get a free API key from [openrouter.ai](https://openrouter.ai)
+2. Create `.env` file in the `Baymax` folder:
+
+```
+OPENROUTER_API_KEY=your_key_here
+```
+
+3. Run it:
+
+```bash
 python manage.py runserver
 ```
 
-## Environment Variables
+4. Open `http://127.0.0.1:8000/` in your browser
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `OPENROUTER_API_KEY` | OpenRouter API key (get one at openrouter.ai) | — |
-| `OPENROUTER_MODEL` | LLM model to use | `inclusionai/ling-3.0-flash:free` |
-| `SECRET_KEY` | Django secret key | insecure dev key |
-| `DEBUG` | Debug mode | `True` |
+## How It Works
 
-## Endpoints
+1. Upload a CSV or Excel file
+2. Ask a question like "What is the average sales?" or "Show top 10 rows"
+3. Get an answer
 
-| Path | Description |
-|------|-------------|
-| `/` | Upload CSV/Excel file |
-| `/ask/` | Ask questions about uploaded data |
+## Supported Questions
 
-## Stack
-
-- Django 5.2
-- Pandas / NumPy / DuckDB
-- OpenRouter API (OpenAI-compatible)
+- Lookup: "Find row with id 5"
+- Count: "How many rows have status = active?"
+- Search: "Find rows containing 'python'"
+- Aggregates: "What is the total revenue?"
+- Text: "What is the longest sentence in column name?"
+- Trends: "Is salary increasing over time?"
+- Outliers: "Are there outliers in the price column?"
+- Summary: "Give me overview of the dataset"
