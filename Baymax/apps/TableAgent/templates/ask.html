@@ -1,473 +1,308 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ask Questions - Table Agent</title>
-    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <style>
-        * { box-sizing: border-box; }
-        body {
-            font-family: 'Roboto', sans-serif;
-            background: linear-gradient(135deg, #1a2a6c, #b21f1f, #1a2a6c);
-            min-height: 100vh;
-            padding: 20px;
-        }
-        .chat-container {
-            background: white;
-            border-radius: 15px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-            overflow: hidden;
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-        .chat-header {
-            background: #4e73df;
-            color: white;
-            padding: 20px 30px;
-        }
-        .chat-body { display: flex; min-height: 70vh; }
-        .sidebar {
-            width: 300px;
-            background: #f8f9fc;
-            border-right: 1px solid #e3e6f0;
-            padding: 20px;
-            overflow-y: auto;
-        }
-        .main-content { flex: 1; display: flex; flex-direction: column; }
-        .chat-messages {
-            flex: 1;
-            padding: 20px;
-            overflow-y: auto;
-            background: #f0f5ff;
-            max-height: 60vh;
-        }
-        .message { margin-bottom: 20px; max-width: 90%; }
-        .user-message { margin-left: auto; }
-        .agent-message { margin-right: auto; }
-        .message-content {
-            padding: 15px;
-            border-radius: 10px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        .user-message .message-content {
-            background: #4e73df;
-            color: white;
-            border-bottom-right-radius: 0;
-        }
-        .agent-message .message-content {
-            background: white;
-            border: 1px solid #e3e6f0;
-            border-bottom-left-radius: 0;
-        }
-        .chat-input {
-            padding: 20px;
-            background: white;
-            border-top: 1px solid #e3e6f0;
-        }
-        .data-info {
-            background: white;
-            border-radius: 10px;
-            padding: 15px;
-            margin-bottom: 20px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-        }
-        .data-info h6 {
-            color: #4e73df;
-            border-bottom: 1px solid #e3e6f0;
-            padding-bottom: 10px;
-            margin-bottom: 15px;
-        }
-        .column-list { max-height: 200px; overflow-y: auto; }
-        .sample-table { font-size: 14px; }
-        .sample-table th { background: #4e73df; color: white; }
-
-        /* Thinking / Reasoning */
-        .thinking-box {
-            background: #f8f9fa;
-            border: 1px solid #dee2e6;
-            border-left: 4px solid #6c757d;
-            border-radius: 8px;
-            margin-bottom: 12px;
-            overflow: hidden;
-            transition: all 0.3s;
-        }
-        .thinking-header {
-            padding: 10px 15px;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 13px;
-            color: #6c757d;
-            user-select: none;
-        }
-        .thinking-header:hover { background: #e9ecef; }
-        .thinking-header .spinner {
-            width: 14px; height: 14px;
-            border: 2px solid #dee2e6;
-            border-top: 2px solid #4e73df;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-        .thinking-body {
-            padding: 0 15px 12px;
-            font-size: 13px;
-            color: #495057;
-            line-height: 1.6;
-            max-height: 200px;
-            overflow-y: auto;
-            display: none;
-            white-space: pre-wrap;
-            font-family: 'Courier New', monospace;
-        }
-        .thinking-body.expanded { display: block; }
-        .thinking-header .arrow { transition: transform 0.3s; }
-        .thinking-header.expanded .arrow { transform: rotate(90deg); }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        /* Result content */
-        .result-text {
-            line-height: 1.7;
-            white-space: pre-wrap;
-        }
-
-        /* Step log */
-        .step-log {
-            font-size: 12px;
-            color: #6c757d;
-            padding: 4px 0;
-            border-bottom: 1px solid #f0f0f0;
-        }
-        .step-log:last-child { border-bottom: none; }
-
-        .typing-indicator { display: none; padding: 10px 0; }
-        .typing-indicator span {
-            height: 10px; width: 10px; float: left;
-            margin: 0 2px; background-color: #4e73df;
-            display: block; border-radius: 50%; opacity: 0.4;
-        }
-        .typing-indicator span:nth-of-type(1) { animation: typing 1s infinite; }
-        .typing-indicator span:nth-of-type(2) { animation: typing 1s infinite 0.2s; }
-        .typing-indicator span:nth-of-type(3) { animation: typing 1s infinite 0.4s; }
-        @keyframes typing {
-            0% { transform: translateY(0px); }
-            50% { transform: translateY(-5px); }
-            100% { transform: translateY(0px); }
-        }
-        .btn-ask {
-            background: #4e73df; border: none;
-            padding: 10px 20px; font-weight: 500;
-            border-radius: 50px; transition: all 0.3s;
-        }
-        .btn-ask:hover {
-            background: #2e59d9;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
-        }
-        .btn-ask:disabled { background: #6c757d; cursor: not-allowed; transform: none; }
-        .error-msg { color: #dc3545; font-size: 14px; }
-    </style>
-</head>
-<body>
-    <div class="chat-container">
-        <div class="chat-header">
-            <div class="d-flex justify-content-between align-items-center">
-                <div>
-                    <h3><i class="fas fa-robot me-2"></i>AI Table Agent</h3>
-                    <p class="mb-0">Ask questions about your data: {{ file_name }}</p>
+﻿{% extends 'base.html' %}
+{% block title %}Ask Questions - {{ file_name }}{% endblock %}
+{% block content %}
+<div class='chat-container'>
+    <div class='chat-header'>
+        <div>
+            <h3><i class='fas fa-robot me-2'></i>AI Table Agent</h3>
+            <p class='mb-0'>Ask questions about: {{ file_name }}</p>
+        </div>
+        <a href='{% url "upload" %}' class='btn btn-light btn-sm'>
+            <i class='fas fa-upload me-2'></i>Upload New File
+        </a>
+    </div>
+    <div class='chat-body'>
+        <div class='sidebar'>
+            <div class='sidebar-section'>
+                <h6><i class='fas fa-database'></i> Data Information</h6>
+                <div class='sidebar-info-row'>
+                    <span class='label'>File</span>
+                    <span class='value'>{{ file_name }}</span>
                 </div>
-                <a href="{% url 'upload' %}" class="btn btn-light">
-                    <i class="fas fa-upload me-2"></i>Upload New File
+                <div class='sidebar-info-row'>
+                    <span class='label'>Rows</span>
+                    <span class='value'>{{ row_count|floatformat:0 }}</span>
+                </div>
+                <div class='sidebar-info-row'>
+                    <span class='label'>Columns</span>
+                    <span class='value'>{{ columns|length }}</span>
+                </div>
+            </div>
+            <div class='sidebar-section'>
+                <h6><i class='fas fa-columns'></i> Columns</h6>
+                <div class='column-list'>
+                    {% for column in columns %}
+                    <span class='column-badge'>{{ column }}</span>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class='mt-2'>
+                <a href='{% url "visualize" %}' class='btn btn-outline btn-block'>
+                    <i class='fas fa-chart-bar me-2'></i>Chart Builder
                 </a>
             </div>
         </div>
-
-        <div class="chat-body">
-            <div class="sidebar">
-                <div class="data-info">
-                    <h6><i class="fas fa-database me-2"></i>Data Information</h6>
-                    <p><strong>File:</strong> {{ file_name }}</p>
-                    <p><strong>Rows:</strong> {{ row_count|floatformat:0 }}</p>
-                    <p><strong>Columns:</strong> {{ columns|length }}</p>
-                    <h6 class="mt-3"><i class="fas fa-columns me-2"></i>Columns</h6>
-                    <div class="column-list">
-                        {% for column in columns %}
-                        <span class="badge bg-primary me-1 mb-1">{{ column }}</span>
-                        {% endfor %}
+        <div class='main-content'>
+            <div class='chat-messages' id='chatMessages'>
+                <div class='message agent-message'>
+                    <div class='agent-avatar'><i class='fas fa-robot'></i></div>
+                    <div class='message-content' style='margin-top:8px;'>
+                        <div class='welcome-box'>
+                            <h5><i class='fas fa-lightbulb me-2'></i>Welcome to AI Table Agent</h5>
+                            <p>I'm your intelligent data analyst powered by <strong>OpenRouter</strong>.</p>
+                            <p><strong>Try asking:</strong></p>
+                            <ul>
+                                <li>'What is the average of [column]?'</li>
+                                <li>'Show me top 10 rows'</li>
+                                <li>'How many rows have status = active?'</li>
+                                <li>'Give me an overview of the dataset'</li>
+                            </ul>
+                        </div>
                     </div>
                 </div>
             </div>
-
-            <div class="main-content">
-                <div class="chat-messages" id="chatMessages">
-                    <div class="message agent-message">
-                        <div class="message-content">
-                            <div style="background:#e8f5e8;border-left:4px solid #28a745;padding:15px;border-radius:5px;">
-                                <h5><i class="fas fa-lightbulb me-2"></i>Welcome to AI Table Agent</h5>
-                                <p>I'm your intelligent data analyst powered by <strong>Llama 3.3 70B</strong>.</p>
-                                <p><strong>Try asking:</strong></p>
-                                <ul class="mb-0">
-                                    <li>"What's the average of [column]?"</li>
-                                    <li>"Show me trends in [column]"</li>
-                                    <li>"Are there outliers in [column]?"</li>
-                                    <li>"Compare [column1] and [column2]"</li>
-                                    <li>"Give me summary statistics"</li>
-                                </ul>
-                            </div>
-                        </div>
+            <div class='chat-input'>
+                <form id='questionForm'>
+                    <div class='input-wrapper'>
+                        <input type='text' class='form-control' id='questionInput' placeholder='Ask a question about your data...' required autocomplete='off'>
+                        <button class='btn btn-primary' type='submit' id='askButton'>
+                            <i class='fas fa-paper-plane'></i>
+                        </button>
                     </div>
-                </div>
-
-                <div class="chat-input">
-                    <form id="questionForm">
-                        <div class="input-group">
-                            <input type="text" class="form-control" id="questionInput"
-                                   placeholder="Ask a question about your data..." required>
-                            <button class="btn btn-ask" type="submit" id="askButton">
-                                <i class="fas fa-paper-plane me-2"></i>Ask
-                            </button>
-                        </div>
-                    </form>
-                    <div class="typing-indicator mt-3" id="typingIndicator">
-                        <span></span><span></span><span></span>
-                        <small class="ms-3 text-muted">AI is thinking...</small>
-                    </div>
+                </form>
+                <div class='typing-indicator d-none' id='typingIndicator'>
+                    <span class='dot'></span><span class='dot'></span><span class='dot'></span>
+                    <span>AI is thinking...</span>
                 </div>
             </div>
         </div>
     </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('questionForm');
+    const chatMessages = document.getElementById('chatMessages');
+    const questionInput = document.getElementById('questionInput');
+    const typingIndicator = document.getElementById('typingIndicator');
+    const askButton = document.getElementById('askButton');
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script>
-    document.addEventListener('DOMContentLoaded', function() {
-        const form = document.getElementById('questionForm');
-        const chatMessages = document.getElementById('chatMessages');
-        const questionInput = document.getElementById('questionInput');
-        const typingIndicator = document.getElementById('typingIndicator');
-        const askButton = document.getElementById('askButton');
+    form.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const question = questionInput.value.trim();
+        if (!question) return;
 
-        form.addEventListener('submit', async function(e) {
-            e.preventDefault();
-            const question = questionInput.value.trim();
-            if (!question) return;
+        addUserMessage(question);
+        questionInput.value = '';
+        typingIndicator.classList.remove('d-none');
+        questionInput.disabled = true;
+        askButton.disabled = true;
 
-            addUserMessage(question);
-            questionInput.value = '';
-            typingIndicator.style.display = 'block';
-            questionInput.disabled = true;
-            askButton.disabled = true;
+        try {
+            const response = await fetch('{% url "ask" %}', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+                body: JSON.stringify({ query: question })
+            });
+            if (!response.ok) throw new Error('Server error: ' + response.status);
 
-            try {
-                const response = await fetch('{% url "ask" %}', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRFToken': getCookie('csrftoken')
-                    },
-                    body: JSON.stringify({ query: question })
-                });
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let agentMsg = null;
+            let thinkingBox = null;
+            let thinkingEl = null;
+            let chartN = 0;
+            let tableN = 0;
 
-                if (!response.ok) throw new Error(`Server error: ${response.status}`);
-
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
-                let thinkingBox = null;
-                let thinkingContent = null;
-                let resultDiv = null;
-                let resultContent = '';
-                let reasoningContent = '';
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-
-                    buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split('\n');
-                    buffer = lines.pop();
-
-                    for (const line of lines) {
-                        if (!line.startsWith('data: ')) continue;
-                        try {
-                            const event = JSON.parse(line.slice(6));
-
-                            if (event.type === 'reasoning') {
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop();
+                for (const line of lines) {
+                    if (!line.startsWith('data: ')) continue;
+                    try {
+                        const event = JSON.parse(line.slice(6));
+                        switch (event.type) {
+                            case 'thinking':
+                            case 'step_log':
+                            case 'code':
                                 if (!thinkingBox) {
                                     thinkingBox = createThinkingBox();
-                                    resultDiv = addAgentMessage('');
-                                    resultDiv.querySelector('.message-content').prepend(thinkingBox);
-                                    thinkingContent = thinkingBox.querySelector('.thinking-body');
+                                    agentMsg = addAgentMessage('');
+                                    const tb = thinkingBox.querySelector('.thinking-body');
+                                    tb.textContent = '';
+                                    thinkingEl = tb;
                                 }
-                                reasoningContent += event.content;
-                                thinkingContent.textContent = reasoningContent;
-                                thinkingContent.scrollTop = thinkingContent.scrollHeight;
-                            }
-
-                            else if (event.type === 'content') {
-                                if (thinkingBox) {
-                                    const header = thinkingBox.querySelector('.thinking-header');
-                                    const spinner = header.querySelector('.spinner');
-                                    if (spinner) spinner.remove();
+                                if (event.type === 'code') {
+                                    const codeHeader = document.createElement('div');
+                                    codeHeader.className = 'code-block';
+                                    codeHeader.innerHTML = '<div class=\"code-header\"><span>Generated Code</span></div><pre>' + escapeHtml(event.content) + '</pre>';
+                                    const contentDiv = agentMsg.querySelector('.message-content');
+                                    contentDiv.appendChild(codeHeader);
+                                } else {
+                                    thinkingEl.textContent += '\n' + event.content;
                                 }
-                                resultContent += event.content;
-                                if (resultDiv) {
-                                    const textEl = resultDiv.querySelector('.result-text');
-                                    if (textEl) textEl.textContent = resultContent;
-                                }
-                            }
-
-                            else if (event.type === 'thinking') {
-                                if (!thinkingBox) {
-                                    thinkingBox = createThinkingBox();
-                                    resultDiv = addAgentMessage('');
-                                    resultDiv.querySelector('.message-content').prepend(thinkingBox);
-                                    thinkingContent = thinkingBox.querySelector('.thinking-body');
-                                }
-                                reasoningContent += event.content;
-                                thinkingContent.textContent = reasoningContent;
-                                thinkingContent.scrollTop = thinkingContent.scrollHeight;
-                            }
-
-                            else if (event.type === 'step_log') {
-                                if (!thinkingBox) {
-                                    thinkingBox = createThinkingBox();
-                                    resultDiv = addAgentMessage('');
-                                    resultDiv.querySelector('.message-content').prepend(thinkingBox);
-                                    thinkingContent = thinkingBox.querySelector('.thinking-body');
-                                }
-                                reasoningContent += '\n' + event.content;
-                                thinkingContent.textContent = reasoningContent;
-                            }
-
-                            else if (event.type === 'code') {
-                                if (!thinkingBox) {
-                                    thinkingBox = createThinkingBox();
-                                    resultDiv = addAgentMessage('');
-                                    resultDiv.querySelector('.message-content').prepend(thinkingBox);
-                                    thinkingContent = thinkingBox.querySelector('.thinking-body');
-                                }
-                                reasoningContent += '\n\nGenerated Code:\n' + event.content;
-                                thinkingContent.textContent = reasoningContent;
-                                thinkingContent.scrollTop = thinkingContent.scrollHeight;
-                            }
-
-                            else if (event.type === 'result') {
-                                if (resultDiv) {
-                                    const textEl = resultDiv.querySelector('.result-text');
-                                    if (textEl) textEl.textContent = event.answer;
+                                break;
+                            case 'chart':
+                                chartN++;
+                                var cDiv = document.createElement('div');
+                                cDiv.className = 'chart-compact';
+                                var innerId = 'chart-' + chartN;
+                                cDiv.innerHTML = '<div class=\"chart-compact-inner\" id=\"' + innerId + '\"></div>' +
+                                    '<div class=\"chart-expand-hint\"><i class=\"fas fa-expand-alt\"></i> Click to expand</div>';
+                                if (!agentMsg) agentMsg = addAgentMessage('');
+                                agentMsg.querySelector('.message-content').appendChild(cDiv);
+                                BaymaxCharts.renderCompact(innerId, event.chart);
+                                (function(cfg) {
+                                    cDiv.addEventListener('click', function() { BaymaxCharts.openModal(cfg); });
+                                })(event.chart);
+                                break;
+                            case 'data':
+                                tableN++;
+                                const tDiv = document.createElement('div');
+                                tDiv.className = 'data-table-wrapper';
+                                tDiv.innerHTML = '<div id=\"table-' + tableN + '\"></div>';
+                                if (!agentMsg) agentMsg = addAgentMessage('');
+                                agentMsg.querySelector('.message-content').appendChild(tDiv);
+                                BaymaxCharts.renderTable('table-' + tableN, event.payload);
+                                break;
+                            case 'result':
+                                if (!agentMsg) agentMsg = addAgentMessage('');
+                                const rt = agentMsg.querySelector('.result-text');
+                                if (rt) {
+                                    rt.innerHTML = renderMarkdown(event.answer);
+                                    if (event.raw_data) {
+                                        const rawSection = createCollapsibleSection('Raw Data', event.raw_data);
+                                        rt.appendChild(rawSection);
+                                    }
                                 }
                                 finalizeThinking(thinkingBox);
-                            }
-
-                            else if (event.type === 'error') {
+                                break;
+                            case 'error':
                                 addErrorMessage(event.message);
-                                if (resultDiv && resultDiv.querySelector('.result-text')) {
-                                    resultDiv.querySelector('.result-text').textContent = '';
-                                }
-                            }
-                        } catch (parseErr) {
-                            // skip malformed lines
+                                finalizeThinking(thinkingBox);
+                                break;
                         }
-                    }
-                }
-
-                // Finalize thinking box spinner
-                finalizeThinking(thinkingBox);
-
-            } catch (error) {
-                addErrorMessage(error.message);
-            } finally {
-                typingIndicator.style.display = 'none';
-                questionInput.disabled = false;
-                askButton.disabled = false;
-                questionInput.focus();
-            }
-        });
-
-        function createThinkingBox() {
-            const box = document.createElement('div');
-            box.className = 'thinking-box';
-            box.innerHTML = `
-                <div class="thinking-header" onclick="this.classList.toggle('expanded');this.nextElementSibling.classList.toggle('expanded')">
-                    <div class="spinner"></div>
-                    <span class="arrow">&#9654;</span>
-                    <span>AI Thinking Process</span>
-                </div>
-                <div class="thinking-body"></div>
-            `;
-            return box;
-        }
-
-        function finalizeThinking(box) {
-            if (!box) return;
-            const header = box.querySelector('.thinking-header');
-            const spinner = header.querySelector('.spinner');
-            if (spinner) {
-                spinner.style.borderTopColor = '#28a745';
-                spinner.style.animation = 'none';
-                spinner.style.transform = 'rotate(0deg)';
-                setTimeout(() => spinner.remove(), 500);
-            }
-        }
-
-        function addUserMessage(text) {
-            const div = document.createElement('div');
-            div.className = 'message user-message';
-            div.innerHTML = `<div class="message-content">${escapeHtml(text)}</div>`;
-            chatMessages.appendChild(div);
-            scrollToBottom();
-        }
-
-        function addAgentMessage(text) {
-            const div = document.createElement('div');
-            div.className = 'message agent-message';
-            div.innerHTML = `<div class="message-content"><div class="result-text">${escapeHtml(text)}</div></div>`;
-            chatMessages.appendChild(div);
-            scrollToBottom();
-            return div;
-        }
-
-        function addErrorMessage(text) {
-            const div = document.createElement('div');
-            div.className = 'message agent-message';
-            div.innerHTML = `<div class="message-content"><div class="error-msg"><i class="fas fa-exclamation-triangle me-2"></i>${escapeHtml(text)}</div></div>`;
-            chatMessages.appendChild(div);
-            scrollToBottom();
-        }
-
-        function escapeHtml(text) {
-            if (text === null || text === undefined) return 'N/A';
-            const div = document.createElement('div');
-            div.textContent = text.toString();
-            return div.innerHTML;
-        }
-
-        function scrollToBottom() {
-            setTimeout(() => { chatMessages.scrollTop = chatMessages.scrollHeight; }, 100);
-        }
-
-        function getCookie(name) {
-            let cookieValue = null;
-            if (document.cookie && document.cookie !== '') {
-                const cookies = document.cookie.split(';');
-                for (let i = 0; i < cookies.length; i++) {
-                    const cookie = cookies[i].trim();
-                    if (cookie.substring(0, name.length + 1) === (name + '=')) {
-                        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
-                        break;
-                    }
+                    } catch (parseErr) { console.error('[SSE] Error processing event:', parseErr); }
                 }
             }
-            return cookieValue;
+            finalizeThinking(thinkingBox);
+        } catch (error) {
+            addErrorMessage(error.message);
+        } finally {
+            typingIndicator.classList.add('d-none');
+            questionInput.disabled = false;
+            askButton.disabled = false;
+            questionInput.focus();
         }
     });
-    </script>
-</body>
-</html>
+
+    function createThinkingBox() {
+        const box = document.createElement('div');
+        box.className = 'thinking-box';
+        box.innerHTML = '<div class=\"thinking-header\"><div class=\"spinner\"></div><span>AI Thinking Process</span><span class=\"arrow\">&#9654;</span></div><div class=\"thinking-body\"></div>';
+        const header = box.querySelector('.thinking-header');
+        header.addEventListener('click', function() {
+            header.classList.toggle('expanded');
+            header.nextElementSibling.classList.toggle('expanded');
+        });
+        return box;
+    }
+
+    function finalizeThinking(box) {
+        if (!box) return;
+        const header = box.querySelector('.thinking-header');
+        const spinner = header.querySelector('.spinner');
+        if (spinner) {
+            spinner.classList.add('done');
+            setTimeout(function() { if (spinner.parentNode) spinner.remove(); }, 400);
+        }
+    }
+
+    function addUserMessage(text) {
+        const div = document.createElement('div');
+        div.className = 'message user-message animate-fade-in-up';
+        div.innerHTML = '<div class=\"message-content\">' + escapeHtml(text) + '</div><div class=\"message-meta\">You</div>';
+        chatMessages.appendChild(div);
+        scrollToBottom();
+    }
+
+    function addAgentMessage(text) {
+        const div = document.createElement('div');
+        div.className = 'message agent-message animate-fade-in-up';
+        div.innerHTML = '<div class=\"agent-avatar\"><i class=\"fas fa-robot\"></i></div><div class=\"message-content\" style=\"margin-top:8px;\"><div class=\"result-text\">' + escapeHtml(text) + '</div></div><div class=\"message-meta\">Baymax AI</div>';
+        chatMessages.appendChild(div);
+        scrollToBottom();
+        return div;
+    }
+
+    function addErrorMessage(text) {
+        const div = document.createElement('div');
+        div.className = 'message agent-message animate-fade-in-up';
+        div.innerHTML = '<div class=\"error-message\"><i class=\"fas fa-exclamation-triangle\"></i><span>' + escapeHtml(text) + '</span></div>';
+        chatMessages.appendChild(div);
+        scrollToBottom();
+    }
+
+    function renderMarkdown(text) {
+        if (text === null || text === undefined) return '';
+        try {
+            const rawHtml = marked.parse(String(text));
+            return DOMPurify.sanitize(rawHtml);
+        } catch (e) {
+            const div = document.createElement('div');
+            div.textContent = String(text);
+            return div.innerHTML;
+        }
+    }
+
+    function createCollapsibleSection(title, content) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'raw-data-section';
+        const header = document.createElement('div');
+        header.className = 'raw-data-header';
+        header.innerHTML = '<i class=\"fas fa-chevron-right\"></i> ' + escapeHtml(title);
+        const body = document.createElement('div');
+        body.className = 'raw-data-body';
+        body.textContent = String(content);
+        header.addEventListener('click', function() {
+            header.classList.toggle('expanded');
+            body.classList.toggle('expanded');
+        });
+        wrapper.appendChild(header);
+        wrapper.appendChild(body);
+        return wrapper;
+    }
+
+    function escapeHtml(text) {
+        if (text === null || text === undefined) return 'N/A';
+        const div = document.createElement('div');
+        div.textContent = String(text);
+        return div.innerHTML;
+    }
+
+    function scrollToBottom() {
+        setTimeout(function() { chatMessages.scrollTop = chatMessages.scrollHeight; }, 100);
+    }
+
+    function getCookie(name) {
+        let cookieValue = null;
+        if (document.cookie && document.cookie !== '') {
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                    break;
+                }
+            }
+        }
+        return cookieValue;
+    }
+});
+</script>
+{% endblock %}
