@@ -36,6 +36,8 @@ python manage.py runserver
 | `/upload/` | POST | Upload CSV/Excel file (multipart/form-data, field: `data_file`) |
 | `/upload/ask/` | GET | Ask questions page (requires upload first) |
 | `/upload/ask/` | POST | Ask a question (JSON body: `{"query": "..."}`) |
+| `/upload/visualize/` | GET | Visualize page — pick columns and chart type |
+| `/upload/visualize/` | POST | Generate chart (JSON body below) |
 
 ## API Details
 
@@ -69,7 +71,26 @@ Body: {"query": "What is the average sales?"}
 Response: Server-Sent Events (SSE) stream with these event types:
 - `thinking` — processing status
 - `code` — generated pandas code
+- `chart` — chart data (when result is visualizable)
+- `data` — table data (when result is a DataFrame)
 - `result` — final answer
+
+### Visualize Data
+
+```
+POST /upload/visualize/
+Content-Type: application/json
+
+Body: {
+  "x_col": "category",
+  "y_col": "revenue",
+  "chart_type": "bar",
+  "agg_func": "sum"
+}
+```
+
+`chart_type`: bar, line, pie, scatter, histogram, area
+`agg_func`: sum, mean, count, min, max, none
 
 ## Example Questions
 
