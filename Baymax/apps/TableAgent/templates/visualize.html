@@ -1,0 +1,124 @@
+﻿{% extends 'base.html' %}
+{% block title %}Visualize Data{% endblock %}
+{% block content %}
+<div class='viz-container'>
+    <div class='viz-header'>
+        <div>
+            <h3><i class='fas fa-chart-bar me-2'></i>Visualize Data</h3>
+            <p>{{ file_name }} - {{ row_count|floatformat:0 }} rows</p>
+        </div>
+        <a href='{% url "ask" %}' class='btn btn-light btn-sm'>
+            <i class='fas fa-arrow-left me-2'></i>Back to Chat
+        </a>
+    </div>
+    <div class='viz-body'>
+        <div class='viz-sidebar'>
+            <h6 class='viz-sidebar-title'>Chart Controls</h6>
+            <div class='control-group'>
+                <label>X-Axis Column</label>
+                <select id='xCol' class='form-select'>{% for column in columns %}<option value='{{ column }}'>{{ column }}</option>{% endfor %}</select>
+            </div>
+            <div class='control-group'>
+                <label>Y-Axis Column</label>
+                <select id='yCol' class='form-select'>{% for column in columns %}<option value='{{ column }}'>{{ column }}</option>{% endfor %}</select>
+            </div>
+            <div class='control-group'>
+                <label>Chart Type</label>
+                <select id='chartType' class='form-select'>
+                    <option value='bar'>Bar</option>
+                    <option value='line'>Line</option>
+                    <option value='pie'>Pie</option>
+                    <option value='scatter'>Scatter</option>
+                    <option value='histogram'>Histogram</option>
+                    <option value='area'>Area</option>
+                    <option value='heatmap'>Heatmap</option>
+                </select>
+            </div>
+            <div class='control-group'>
+                <label>Aggregation</label>
+                <select id='aggFunc' class='form-select'>
+                    <option value='sum'>Sum</option>
+                    <option value='mean'>Mean</option>
+                    <option value='count'>Count</option>
+                    <option value='min'>Min</option>
+                    <option value='max'>Max</option>
+                    <option value='none'>None</option>
+                </select>
+            </div>
+            <button class='btn btn-primary btn-block mt-3' id='generateBtn'>
+                <i class='fas fa-chart-bar me-2'></i>Generate Chart
+            </button>
+            <div class='viz-loading' id='vizLoading'>
+                <div class='spinner'></div>
+                <span>Generating chart...</span>
+            </div>
+        </div>
+        <div class='viz-main'>
+            <div id='vizChart' class='viz-chart-area'>
+                <div class='empty-state'>
+                    <i class='fas fa-chart-pie'></i>
+                    <p>Select columns and click <strong>Generate Chart</strong> to visualize your data</p>
+                </div>
+            </div>
+            <div id='vizTable' class='data-table-wrapper mt-3' style='display:none;'></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+document.getElementById('generateBtn').addEventListener('click', async function() {
+    const btn = document.getElementById('generateBtn');
+    const loading = document.getElementById('vizLoading');
+    btn.disabled = true;
+    loading.classList.add('active');
+    const payload = {
+        x_col: document.getElementById('xCol').value,
+        y_col: document.getElementById('yCol').value,
+        chart_type: document.getElementById('chartType').value,
+        agg_func: document.getElementById('aggFunc').value
+    };
+    try {
+        const response = await fetch('{% url "visualize" %}', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+            body: JSON.stringify(payload)
+        });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const data = await response.json();
+        if (data.status === 'error') {
+            throw new Error(data.message || 'Unknown error');
+        }
+        if (!data.chart) {
+            throw new Error('No chart data received from server');
+        }
+        BaymaxCharts.render('vizChart', data.chart);
+        if (data.data) {
+            const tableDiv = document.getElementById('vizTable');
+            tableDiv.style.display = 'block';
+            BaymaxCharts.renderTable('vizTable', data.data);
+        }
+    } catch (err) {
+        alert('Failed to generate chart: ' + err.message);
+    } finally {
+        btn.disabled = false;
+        loading.classList.remove('active');
+    }
+});
+
+function getCookie(name) {
+    let cookieValue = null;
+    if (document.cookie && document.cookie !== '') {
+        const cookies = document.cookie.split(';');
+        for (let i = 0; i < cookies.length; i++) {
+            const cookie = cookies[i].trim();
+            if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                break;
+            }
+        }
+    }
+    return cookieValue;
+}
+</script>
+{% endblock %}
