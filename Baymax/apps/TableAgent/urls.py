@@ -4,5 +4,5 @@ from . import views
 urlpatterns = [
     path('', views.UploadFileView.as_view(), name='upload'),
     path('ask/', views.AskQuestionView.as_view(), name='ask'),
-    # path('table-info/', views.get_table_info, name='table_info'),
+    path('visualize/', views.VisualizeView.as_view(), name='visualize'),
 ]

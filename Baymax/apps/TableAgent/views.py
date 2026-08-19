@@ -6,6 +6,7 @@ import time
 import re
 import logging
 import traceback
+import datetime
 from typing import Dict, List, Any, Generator
 from difflib import get_close_matches
 
@@ -38,14 +39,81 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 class NumpyEncoder(json.JSONEncoder):
+    """JSON encoder that handles pandas/numpy/datetime types.
+
+    Used as a safety net in json.dumps(event, cls=NumpyEncoder) so that
+    any non-standard type that slips through is serialized correctly.
+    """
     def default(self, obj):
-        if isinstance(obj, (np.integer, np.floating)):
+        if isinstance(obj, (np.integer,)):
+            return int(obj)
+        elif isinstance(obj, (np.floating,)):
             return float(obj)
         elif isinstance(obj, np.ndarray):
             return obj.tolist()
-        elif isinstance(obj, pd.Timestamp):
+        elif isinstance(obj, (pd.Timestamp, datetime.datetime, datetime.date)):
             return obj.isoformat()
+        elif isinstance(obj, np.datetime64):
+            return str(obj)
+        elif isinstance(obj, pd.Timedelta):
+            return str(obj)
+        elif isinstance(obj, (np.bool_,)):
+            return bool(obj)
+        try:
+            if pd.isna(obj):
+                return None
+        except (TypeError, ValueError):
+            pass
         return super().default(obj)
+
+
+def sanitize_for_json(obj):
+    """Recursively convert any data structure to JSON-safe types.
+
+    This is the DEEP fix — it cleans data at the source before it enters
+    the SSE event dict. Handles:
+    - pd.Timestamp / datetime → isoformat string
+    - np.datetime64 → string
+    - pd.Timedelta → string
+    - NaN / NaT / None → None (JSON null)
+    - np.integer → int, np.floating → float, np.bool_ → bool
+    - dict → recursively sanitize values
+    - list / tuple → recursively sanitize items
+    """
+    if obj is None:
+        return None
+    # Handle pandas/numpy scalar types
+    if isinstance(obj, (pd.Timestamp, datetime.datetime, datetime.date)):
+        return obj.isoformat()
+    if isinstance(obj, np.datetime64):
+        return str(obj)
+    if isinstance(obj, pd.Timedelta):
+        return str(obj)
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        val = float(obj)
+        return None if (val != val) else val  # NaN check
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, np.ndarray):
+        return [sanitize_for_json(x) for x in obj.tolist()]
+    # Handle NaN/NaT (pd.isna returns True for these)
+    try:
+        if pd.isna(obj):
+            return None
+    except (TypeError, ValueError):
+        pass
+    # Handle float NaN
+    if isinstance(obj, float):
+        return None if (obj != obj) else obj
+    # Recursively handle containers
+    if isinstance(obj, dict):
+        return {str(k): sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [sanitize_for_json(x) for x in obj]
+    # Return everything else as-is (str, int, bool are already JSON-safe)
+    return obj
 
 
 def read_file_robust(file_path: str, file_ext: str) -> pd.DataFrame:
@@ -66,8 +134,8 @@ def read_file_robust(file_path: str, file_ext: str) -> pd.DataFrame:
 
 def safe_execute_code(code_string: str, df: pd.DataFrame) -> dict:
     logger.info(f"[EXEC] Executing code:\n{code_string}")
+    old_stdout = sys.stdout
     try:
-        old_stdout = sys.stdout
         sys.stdout = mystdout = io.StringIO()
 
         local_vars = {'df': df, 'pd': pd, 'np': np, 'result': None}
@@ -76,6 +144,19 @@ def safe_execute_code(code_string: str, df: pd.DataFrame) -> dict:
         sys.stdout = old_stdout
         print_output = mystdout.getvalue()
         result = local_vars.get('result', 'No result variable found')
+
+        # Fallback: if result is string/None, scan for the most recent DataFrame/Series
+        # The LLM often forgets to assign result or assigns a string description instead
+        if not isinstance(result, (pd.DataFrame, pd.Series)):
+            last_chartable = None
+            for key, val in local_vars.items():
+                if key in ('df', 'pd', 'np', 'result'):
+                    continue
+                if isinstance(val, (pd.DataFrame, pd.Series)):
+                    last_chartable = val
+            if last_chartable is not None:
+                logger.info(f"[EXEC] Fallback: result was {type(result).__name__}, found {type(last_chartable).__name__} in local vars")
+                result = last_chartable
 
         if isinstance(result, (pd.DataFrame, pd.Series)):
             if isinstance(result, pd.DataFrame):
@@ -93,11 +174,14 @@ def safe_execute_code(code_string: str, df: pd.DataFrame) -> dict:
             final_output += f"Console Output:\n{print_output}\n"
         final_output += f"Result Variable:\n{result_str}"
 
-        logger.info(f"[EXEC] Success. Output length: {len(final_output)} chars")
-        return {"status": "success", "output": final_output}
+        logger.info(f"[EXEC] Success. Output length: {len(final_output)} chars. Result type: {type(result).__name__}")
+        return {"status": "success", "output": final_output, "result": result}
 
     except Exception as e:
-        sys.stdout = sys.__stdout__
+        if 'old_stdout' in dir():
+            sys.stdout = old_stdout
+        else:
+            sys.stdout = sys.__stdout__
         error_msg = f"{type(e).__name__}: {str(e)}"
         logger.error(f"[EXEC] Failed: {error_msg}")
         return {"status": "error", "error": error_msg}
@@ -258,6 +342,180 @@ def extract_thinking_from_response(text: str) -> str:
 
 
 # =============================================================================
+# CHART DATA EXTRACTION
+# =============================================================================
+
+MAX_CHART_POINTS = 50
+
+CHART_COLORS = [
+    '#4e73df', '#1cc88a', '#36b9cc', '#f6c23e',
+    '#e74a3b', '#858796', '#5a5c69', '#2e59d9',
+]
+
+
+def extract_chart_data(result, suggested_type: str = None) -> dict:
+    """Extract chart-ready data from a pandas result (Series or DataFrame).
+
+    Returns dict with chartType, title, labels, datasets — or None if not chartable.
+    Handles Series, multi-column DataFrames, single-column DataFrames, and numeric-only DataFrames.
+    All output is sanitized via sanitize_for_json() to ensure JSON-safe types.
+    """
+    # --- Series handling ---
+    if isinstance(result, pd.Series):
+        if len(result) == 0:
+            return None
+        # Skip Series with all non-numeric (string) data
+        if result.dtype == 'object':
+            return None
+        labels = [str(x) for x in result.index.tolist()[:MAX_CHART_POINTS]]
+        values = [float(x) if pd.notna(x) else 0 for x in result.values[:MAX_CHART_POINTS]]
+        chart_type = suggested_type or 'bar'
+        return sanitize_for_json({
+            'chartType': chart_type,
+            'title': '',
+            'labels': labels,
+            'datasets': [{'label': str(result.name) if result.name else 'Value', 'data': values}],
+        })
+
+    # --- DataFrame handling ---
+    if isinstance(result, pd.DataFrame):
+        if result.empty:
+            return None
+
+        numeric_cols = result.select_dtypes(include=[np.number]).columns.tolist()
+        non_numeric_cols = result.select_dtypes(exclude=[np.number]).columns.tolist()
+        df = result.head(MAX_CHART_POINTS)
+
+        # Case 0: OHLC (candlestick) detection — Open, High, Low, Close columns
+        col_names_lower = [str(c).lower() for c in result.columns]
+        has_ohlc = all(col in col_names_lower for col in ['open', 'high', 'low', 'close'])
+        if has_ohlc:
+            # Find the actual column names (case-insensitive)
+            col_map = {str(c).lower(): c for c in result.columns}
+            o_col, h_col, l_col, c_col = col_map['open'], col_map['high'], col_map['low'], col_map['close']
+            # Find label column (first non-numeric column, or use index)
+            label_col = None
+            for c in result.columns:
+                if str(c).lower() not in ['open', 'high', 'low', 'close', 'volume', 'trend', 'change_%']:
+                    if not pd.api.types.is_numeric_dtype(result[c]):
+                        label_col = c
+                        break
+            if label_col:
+                labels = [str(x) for x in df[label_col].tolist()]
+            else:
+                labels = [str(idx) for idx in df.index.tolist()]
+            # Build candlestick data: [open, high, low, close] per point
+            ohlc_data = []
+            for _, row in df.iterrows():
+                ohlc_data.append([
+                    float(row[o_col]) if pd.notna(row[o_col]) else 0,
+                    float(row[h_col]) if pd.notna(row[h_col]) else 0,
+                    float(row[l_col]) if pd.notna(row[l_col]) else 0,
+                    float(row[c_col]) if pd.notna(row[c_col]) else 0,
+                ])
+            return sanitize_for_json({
+                'chartType': 'candlestick',
+                'title': 'OHLC Chart',
+                'labels': labels,
+                'datasets': [{'label': 'OHLC', 'data': ohlc_data}],
+            })
+
+        # Case 1: Has both non-numeric (labels) and numeric (values) columns
+        if non_numeric_cols and numeric_cols:
+            labels = [str(x) for x in df[non_numeric_cols[0]].tolist()]
+            datasets = []
+            for col in numeric_cols[:4]:
+                datasets.append({
+                    'label': str(col),
+                    'data': [float(x) if pd.notna(x) else 0 for x in df[col].tolist()],
+                })
+            chart_type = suggested_type or ('pie' if len(df) <= 8 and len(numeric_cols) == 1 else 'bar')
+            return sanitize_for_json({
+                'chartType': chart_type,
+                'title': '',
+                'labels': labels,
+                'datasets': datasets,
+            })
+
+        # Case 2: All numeric columns — use row index as labels
+        if numeric_cols and not non_numeric_cols:
+            labels = [str(idx) for idx in df.index.tolist()[:MAX_CHART_POINTS]]
+            datasets = []
+            for col in numeric_cols[:4]:
+                datasets.append({
+                    'label': str(col),
+                    'data': [float(x) if pd.notna(x) else 0 for x in df[col].tolist()],
+                })
+            chart_type = suggested_type or ('bar' if len(numeric_cols) > 1 else 'line')
+            return sanitize_for_json({
+                'chartType': chart_type,
+                'title': '',
+                'labels': labels,
+                'datasets': datasets,
+            })
+
+        # Case 3: Single numeric column with non-numeric index (common from groupby)
+        if len(numeric_cols) == 1 and len(non_numeric_cols) == 0:
+            labels = [str(idx) for idx in df.index.tolist()[:MAX_CHART_POINTS]]
+            values = [float(x) if pd.notna(x) else 0 for x in df[numeric_cols[0]].tolist()[:MAX_CHART_POINTS]]
+            chart_type = suggested_type or 'bar'
+            return sanitize_for_json({
+                'chartType': chart_type,
+                'title': '',
+                'labels': labels,
+                'datasets': [{'label': str(numeric_cols[0]), 'data': values}],
+            })
+
+        # Case 4: Two numeric columns — treat first as X, second as Y (scatter)
+        if len(numeric_cols) >= 2:
+            x_col = numeric_cols[0]
+            y_col = numeric_cols[1]
+            labels = [str(x) for x in df[x_col].tolist()]
+            chart_type = suggested_type or 'scatter'
+            return sanitize_for_json({
+                'chartType': chart_type,
+                'title': '',
+                'labels': labels,
+                'datasets': [{
+                    'label': str(y_col),
+                    'data': [float(x) if pd.notna(x) else 0 for x in df[y_col].tolist()],
+                }],
+            })
+
+        # Case 5: Single-column DataFrame — use index as labels, column as values
+        if len(result.columns) == 1:
+            col = result.columns[0]
+            if pd.api.types.is_numeric_dtype(result[col]):
+                labels = [str(idx) for idx in df.index.tolist()[:MAX_CHART_POINTS]]
+                values = [float(x) if pd.notna(x) else 0 for x in df[col].tolist()[:MAX_CHART_POINTS]]
+                chart_type = suggested_type or 'bar'
+                return sanitize_for_json({
+                    'chartType': chart_type,
+                    'title': '',
+                    'labels': labels,
+                    'datasets': [{'label': str(col), 'data': values}],
+                })
+
+    return None
+
+
+def extract_df_payload(result) -> dict:
+    """Extract tabular data payload from a DataFrame result.
+
+    Returns dict with columns, rows, row_count — or None if not a DataFrame.
+    All values are sanitized via sanitize_for_json() to ensure JSON-safe types.
+    """
+    if not isinstance(result, pd.DataFrame) or result.empty:
+        return None
+    df = result.head(MAX_CHART_POINTS)
+    return sanitize_for_json({
+        'columns': [str(c) for c in df.columns.tolist()],
+        'rows': df.values.tolist(),
+        'row_count': len(result),
+    })
+
+
+# =============================================================================
 # LLM CLIENT (Simplified, single-shot)
 # =============================================================================
 
@@ -345,10 +603,10 @@ class LLMClient:
                 return
 
     def generate_code(self, schema: dict, query: str, sample_data: str, error_context: str = "") -> dict:
-        """Single LLM call that generates pandas code to answer the question."""
+        """Single LLM call that generates pandas code to answer the user's question."""
         schema_str = json.dumps(schema, indent=2, cls=NumpyEncoder)
 
-        system_prompt = f"""You are an expert Python Data Scientist. Write pandas code to answer the user's question.
+        system_prompt = f"""You are an expert Python Data Scientist. Write pandas code to answer the user's question about their dataset.
 
 Dataset Schema:
 {schema_str}
@@ -356,7 +614,14 @@ Dataset Schema:
 Sample Data (first 10 rows):
 {sample_data}
 
-CRITICAL RULES:
+IMPORTANT — UNDERSTAND THE QUERY FIRST:
+- If the user is greeting you (hi, hello, hey, good morning, etc.), respond with a SHORT friendly greeting. Do NOT write any code. Example: result = "Hey! I'm Baymax, your data analyst. Ask me anything about your data!"
+- If the user asks something unrelated to data analysis (jokes, general knowledge, opinions, etc.), respond with a SHORT polite message redirecting them to data questions. Example: result = "I'm here to help you analyze your data! Try asking something like 'What is the average of column X?'"
+- If the question IS about data analysis, proceed to write pandas code below.
+
+ONLY write pandas code when the question is clearly about analyzing, querying, summarizing, or visualizing the uploaded dataset.
+
+CRITICAL RULES FOR DATA QUESTIONS:
 - Use pandas (pd) and numpy (np) — they are already imported
 - ALWAYS assign your final answer to a variable named `result`
 - The `result` must be INFORMATIVE — never return just a single name or number alone
@@ -364,17 +629,45 @@ CRITICAL RULES:
   - For "highest/lowest" questions: show the value AND the number (e.g. "Desktop: $1,250 discount")
   - For aggregations: show a summary with key numbers
   - For comparisons: show a ranked list with values
-- Use print() or format result as a clear string with numbers, not just a raw value
 - Handle null values with .isna() / .dropna()
 - Verify column names match the schema exactly
 - Wrap operations in try/except for safety
 
-Example of GOOD result:
+CHARTING RULES (VERY IMPORTANT):
+- NEVER use matplotlib, seaborn, plotly, plt.plot, plt.savefig, or ANY Python plotting library
+- NEVER save charts to files (no .png, .jpg, .svg, etc.)
+- The frontend has its own charting system — it will automatically render interactive charts from your data
+- When the user asks to visualize, chart, plot, graph, show trends, compare, break down, or analyze distributions:
+  → Return a pandas Series or DataFrame as `result` (NOT a string)
+  → For single-column comparisons: use a Series (e.g. result = df.groupby('category')['revenue'].sum().sort_values(ascending=False))
+  → For multi-column comparisons: use a DataFrame with meaningful column names
+  → For time trends: use a Series with the time column as index
+  → For distributions: use value_counts() or a summary DataFrame
+  → Keep the data clean and well-structured — the chart system will handle the rest
+- When the question is a simple factual answer (not visual), return a descriptive string as `result`
+
+Example of GOOD result (string for factual questions):
   result = "Desktop ($1,250) has the highest discount, followed by Laptop ($890) and Phone ($450)"
+
+Example of GOOD result (Series for charting):
+  result = df.groupby('category')['revenue'].sum().sort_values(ascending=False)
+
+Example of GOOD result (DataFrame for multi-series charting):
+  result = df.groupby('category')[['revenue', 'cost']].sum()
+
+Example of GOOD result (greeting — NO code needed):
+  result = "Hey! I'm Baymax. Ask me anything about your data — like 'What's the total revenue?' or 'Show me top 10 rows'"
 
 Example of BAD result:
   result = "Desktop"
-  (this gives no context — avoid this!)"""
+  (this gives no context — avoid this!)
+
+Example of BAD result (matplotlib — NEVER do this):
+  import matplotlib.pyplot as plt
+  df.plot(kind='bar')
+  plt.savefig('chart.png')
+  result = "Chart saved"
+  (NEVER use matplotlib — return the DataFrame instead)"""
 
         user_message = f"Question: {query}"
 
@@ -413,7 +706,13 @@ Fix the error and generate corrected code."""
                 "Convert the raw data output below into a clear, easy-to-understand answer. "
                 "Write like you are explaining to a curious friend who is not technical. "
                 "Use simple sentences. Include actual numbers and values from the data. "
-                "Do NOT use markdown, asterisks, or code blocks. "
+                "Use Markdown formatting to structure your answer:\n"
+                "- Use **bold** for key numbers and important findings\n"
+                "- Use bullet lists for breakdowns and comparisons\n"
+                "- Use Markdown tables for tabular data (| col1 | col2 | format)\n"
+                "- Use `backticks` for column names and code references\n"
+                "- Use ### headers to separate sections if the answer is long\n"
+                "- Keep paragraphs short (2-3 sentences max)\n"
                 "Answer the question directly first, then share interesting patterns or insights. "
                 "Be thorough but natural — like a helpful conversation."
             )},
@@ -421,12 +720,83 @@ Fix the error and generate corrected code."""
         ]
         logger.info(f"[HUMANIZE] Generating friendly answer for: {query[:80]}")
         response = self._call(messages, max_tokens=2000)
+        if "error" in response:
+            logger.warning(f"[HUMANIZE] LLM call failed: {response['error']}")
+            return raw_output[:2000]
         if "choices" in response:
             content = response["choices"][0]["message"]["content"]
+            if not content:
+                logger.warning("[HUMANIZE] LLM returned empty content, using raw output")
+                return raw_output[:2000]
             logger.info(f"[HUMANIZE] Result length: {len(content)} chars")
             return content
         logger.warning("[HUMANIZE] LLM call failed, returning raw output")
-        return raw_output
+        return raw_output[:2000]
+
+
+# =============================================================================
+# MATPLOTLIB STRIPPING (defensive — don't trust the LLM)
+# =============================================================================
+
+def strip_matplotlib(code: str) -> str:
+    """Remove matplotlib/seaborn/plotly code from generated code.
+
+    Even if the LLM ignores the prompt rules and generates plotting code,
+    this transforms .plot() calls into 'result = <data_expression>' so the
+    chart data is preserved and can be rendered by Highcharts.
+    """
+    lines = code.split('\n')
+    cleaned = []
+    result_assigned = False
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Skip import lines for plotting libraries
+        if any(lib in stripped for lib in [
+            'import matplotlib', 'from matplotlib',
+            'import seaborn', 'from seaborn',
+            'import plotly', 'from plotly',
+            'import plt', 'plt ='
+        ]):
+            continue
+
+        # Skip plt.* calls (plt.show, plt.savefig, plt.title, etc.)
+        if stripped.startswith('plt.') or 'plt.' in stripped:
+            continue
+
+        # Transform .plot()/.hist()/.boxplot() calls into result assignments
+        # This preserves the data so the frontend can render it as a chart
+        match = re.match(r'^(.+?)\s*\.(plot|hist|boxplot)\s*\(', stripped)
+        if match:
+            data_expr = match.group(1)
+            # Don't transform if it's a plt.plot() call (already skipped above)
+            if not data_expr.startswith('plt'):
+                # Only assign to result if not already assigned
+                if not result_assigned:
+                    cleaned.append(f'result = {data_expr}')
+                    result_assigned = True
+                continue
+
+        # Remove string result assignments (e.g. result = "Chart created")
+        # These overwrite the transformed data assignment and kill the chart
+        if re.match(r'^result\s*=\s*["\']', stripped):
+            continue
+
+        # Skip savefig calls
+        if 'savefig' in stripped:
+            continue
+
+        # Skip show() calls
+        if stripped.endswith('.show()') or stripped == 'plt.show()':
+            continue
+
+        cleaned.append(line)
+
+    result = '\n'.join(cleaned)
+    if result != code:
+        logger.info("[STRIP] Transformed plotting code to result assignment")
+    return result
 
 
 # =============================================================================
@@ -476,6 +846,8 @@ class DataAnalysisAgent:
                 return
 
             code = result["code"]
+            # Strip any matplotlib/seaborn code that the LLM might have generated
+            code = strip_matplotlib(code)
             thinking = result.get("thinking", "")
 
             if thinking:
@@ -488,14 +860,29 @@ class DataAnalysisAgent:
             exec_result = safe_execute_code(code, self.df)
 
             if exec_result["status"] == "success":
-                # Step 3: Success — humanize result
                 raw_output = exec_result["output"]
-                logger.info(f"[AGENT] Code executed successfully ({len(raw_output)} chars)")
+                result_value = exec_result.get("result")
+                logger.info(f"[AGENT] Code executed successfully ({len(raw_output)} chars). Result type: {type(result_value).__name__}")
+
+                # B1: Emit chart event if result is chartable
+                chart_data = extract_chart_data(result_value)
+                if chart_data:
+                    yield {"type": "chart", "chart": chart_data}
+                else:
+                    logger.info(f"[AGENT] No chart generated. Result type: {type(result_value).__name__}")
+
+                # B2: Emit data event if result is a DataFrame
+                df_payload = extract_df_payload(result_value)
+                if df_payload:
+                    yield {"type": "data", "payload": df_payload}
 
                 yield {"type": "step_log", "content": "Analysis complete. Generating answer..."}
-                human_answer = self.client.humanize_result(query, raw_output)
-                formatted = f"{human_answer}\n\n---\nRaw data:\n{raw_output[:2000]}"
-                yield {"type": "result", "answer": formatted, "status": "success"}
+                try:
+                    human_answer = self.client.humanize_result(query, raw_output)
+                except Exception as e:
+                    logger.error(f"[AGENT] Humanize failed: {e}")
+                    human_answer = raw_output[:2000]
+                yield {"type": "result", "answer": human_answer, "raw_data": raw_output[:2000], "status": "success"}
                 return
 
             # Step 4: Code failed — try auto-correction first
@@ -511,10 +898,25 @@ class DataAnalysisAgent:
                 exec_result = safe_execute_code(corrected_code, self.df)
                 if exec_result["status"] == "success":
                     raw_output = exec_result["output"]
+                    result_value = exec_result.get("result")
+
+                    chart_data = extract_chart_data(result_value)
+                    if chart_data:
+                        yield {"type": "chart", "chart": chart_data}
+                    else:
+                        logger.info(f"[AGENT] No chart generated (auto-corrected). Result type: {type(result_value).__name__}")
+
+                    df_payload = extract_df_payload(result_value)
+                    if df_payload:
+                        yield {"type": "data", "payload": df_payload}
+
                     yield {"type": "step_log", "content": "Auto-correction succeeded!"}
-                    human_answer = self.client.humanize_result(query, raw_output)
-                    formatted = f"{human_answer}\n\n---\nRaw data:\n{raw_output[:2000]}"
-                    yield {"type": "result", "answer": formatted, "status": "success"}
+                    try:
+                        human_answer = self.client.humanize_result(query, raw_output)
+                    except Exception as e:
+                        logger.error(f"[AGENT] Humanize failed (auto-corrected): {e}")
+                        human_answer = raw_output[:2000]
+                    yield {"type": "result", "answer": human_answer, "raw_data": raw_output[:2000], "status": "success"}
                     return
 
             # Auto-correction didn't work — feed error to LLM on next attempt
@@ -645,7 +1047,7 @@ class AskQuestionView(View):
             def event_stream():
                 for event in agent.analyze(query, schema):
                     logger.debug(f"[ASK] SSE event: {event['type']}")
-                    yield f"data: {json.dumps(event)}\n\n"
+                    yield f"data: {json.dumps(event, cls=NumpyEncoder)}\n\n"
                 logger.info(f"[ASK] Stream complete for query: '{query}'")
 
             return StreamingHttpResponse(
@@ -661,4 +1063,168 @@ class AskQuestionView(View):
             return JsonResponse({'status': 'error', 'message': 'Invalid request format.'})
         except Exception as e:
             logger.error(f"[ASK] Error: {traceback.format_exc()}")
+            return JsonResponse({'status': 'error', 'message': str(e)})
+
+
+@method_decorator(csrf_exempt, name='dispatch')
+class VisualizeView(View):
+    template_name = 'visualize.html'
+    SESSION_FILE_KEY = 'uploaded_file_path'
+    SESSION_SCHEMA_KEY = 'table_schema'
+
+    def get(self, request):
+        file_path = request.session.get(self.SESSION_FILE_KEY)
+        schema = request.session.get(self.SESSION_SCHEMA_KEY)
+        if not file_path:
+            messages.warning(request, 'Please upload a file first.')
+            return redirect('upload')
+
+        columns = [col['name'] for col in schema.get('columns', [])]
+
+        context = {
+            'file_name': request.session.get('original_filename', 'Data'),
+            'row_count': schema.get('rows', 0) if schema else 0,
+            'columns': columns,
+        }
+        return render(request, self.template_name, context)
+
+    def post(self, request):
+        try:
+            data = json.loads(request.body)
+            x_col = data.get('x_col', '').strip()
+            y_col = data.get('y_col', '').strip()
+            chart_type = data.get('chart_type', 'bar').strip()
+            agg_func = data.get('agg_func', 'none').strip()
+
+            if not x_col:
+                return JsonResponse({'status': 'error', 'message': 'X-axis column is required.'})
+
+            file_path = request.session.get(self.SESSION_FILE_KEY)
+            if not file_path or not os.path.exists(file_path):
+                return JsonResponse({'status': 'error', 'message': 'Session expired. Upload again.'})
+
+            if file_path.endswith('.csv'):
+                df = pd.read_csv(file_path)
+            else:
+                df = pd.read_excel(file_path)
+
+            if x_col not in df.columns:
+                return JsonResponse({'status': 'error', 'message': f"Column '{x_col}' not found."})
+            if y_col and y_col not in df.columns:
+                return JsonResponse({'status': 'error', 'message': f"Column '{y_col}' not found."})
+
+            # Validate Y-axis column is numeric (required for most chart types)
+            if y_col and chart_type != 'histogram':
+                if not pd.api.types.is_numeric_dtype(df[y_col]):
+                    return JsonResponse({
+                        'status': 'error',
+                        'message': f"Y-axis column '{y_col}' contains text, not numbers. Select a numeric column for the Y-axis, or remove the Y-axis selection to use count instead."
+                    })
+            # Validate X-axis column is numeric for scatter
+            if chart_type == 'scatter' and x_col:
+                if not pd.api.types.is_numeric_dtype(df[x_col]):
+                    return JsonResponse({
+                        'status': 'error',
+                        'message': f"X-axis column '{x_col}' must be numeric for scatter chart. Try a bar chart instead."
+                    })
+
+            # Build chart data based on chart type
+            chart_result = None
+
+            if chart_type == 'histogram':
+                col_data = df[x_col].dropna()
+                if not pd.api.types.is_numeric_dtype(col_data):
+                    return JsonResponse({'status': 'error', 'message': f"Column '{x_col}' must be numeric for histogram."})
+                counts, bin_edges = np.histogram(col_data, bins=20)
+                labels = [f"{bin_edges[i]:.1f}-{bin_edges[i+1]:.1f}" for i in range(len(counts))]
+                chart_result = {
+                    'chartType': 'column',
+                    'title': f'Distribution of {x_col}',
+                    'labels': labels,
+                    'datasets': [{'label': 'Count', 'data': counts.tolist()}],
+                }
+
+            elif chart_type == 'pie':
+                if y_col:
+                    grouped = df.groupby(x_col)[y_col].sum()
+                else:
+                    grouped = df[x_col].value_counts()
+                chart_result = {
+                    'chartType': 'pie',
+                    'title': f'{y_col or "Count"} by {x_col}',
+                    'labels': [str(x) for x in grouped.index.tolist()],
+                    'datasets': [{'label': y_col or 'Count', 'data': [float(v) for v in grouped.values.tolist()]}],
+                }
+
+            elif chart_type == 'scatter':
+                if not y_col:
+                    return JsonResponse({'status': 'error', 'message': 'Scatter chart requires a Y-axis column.'})
+                sample = df[[x_col, y_col]].dropna().head(MAX_CHART_POINTS)
+                chart_result = {
+                    'chartType': 'scatter',
+                    'title': f'{y_col} vs {x_col}',
+                    'labels': [str(x) for x in sample[x_col].tolist()],
+                    'datasets': [{'label': y_col, 'data': [{'x': float(r[x_col]), 'y': float(r[y_col])} for _, r in sample.iterrows()]}],
+                }
+
+            elif chart_type == 'line' or chart_type == 'area':
+                if y_col:
+                    if agg_func and agg_func != 'none':
+                        grouped = df.groupby(x_col)[y_col].agg(agg_func)
+                    else:
+                        grouped = df.groupby(x_col)[y_col].first()
+                else:
+                    grouped = df[x_col].value_counts().sort_index()
+                chart_result = {
+                    'chartType': chart_type,
+                    'title': f'{y_col or "Count"} by {x_col}',
+                    'labels': [str(x) for x in grouped.index.tolist()],
+                    'datasets': [{'label': y_col or 'Count', 'data': [float(v) if pd.notna(v) else 0 for v in grouped.values.tolist()]}],
+                }
+
+            else:
+                # bar (default)
+                if y_col:
+                    if agg_func and agg_func != 'none':
+                        grouped = df.groupby(x_col)[y_col].agg(agg_func)
+                    else:
+                        grouped = df.groupby(x_col)[y_col].first()
+                else:
+                    grouped = df[x_col].value_counts()
+                chart_result = {
+                    'chartType': 'column',
+                    'title': f'{y_col or "Count"} by {x_col}',
+                    'labels': [str(x) for x in grouped.index.tolist()],
+                    'datasets': [{'label': y_col or 'Count', 'data': [float(v) if pd.notna(v) else 0 for v in grouped.values.tolist()]}],
+                }
+
+            # Cap at MAX_CHART_POINTS
+            if len(chart_result['labels']) > MAX_CHART_POINTS:
+                chart_result['labels'] = chart_result['labels'][:MAX_CHART_POINTS]
+                chart_result['datasets'][0]['data'] = chart_result['datasets'][0]['data'][:MAX_CHART_POINTS]
+
+            # Build data table
+            if y_col:
+                display_cols = [x_col, y_col]
+            else:
+                display_cols = [x_col]
+            table_df = df[display_cols].head(MAX_CHART_POINTS)
+
+            data_payload = sanitize_for_json({
+                'columns': table_df.columns.tolist(),
+                'rows': table_df.values.tolist(),
+                'row_count': len(df),
+            })
+
+            logger.info(f"[VISUALIZE] {chart_type} chart: {x_col} vs {y_col or 'count'}")
+            return JsonResponse({
+                'status': 'success',
+                'chart': sanitize_for_json(chart_result),
+                'data': data_payload,
+            })
+
+        except json.JSONDecodeError:
+            return JsonResponse({'status': 'error', 'message': 'Invalid request format.'})
+        except Exception as e:
+            logger.error(f"[VISUALIZE] Error: {traceback.format_exc()}")
             return JsonResponse({'status': 'error', 'message': str(e)})
