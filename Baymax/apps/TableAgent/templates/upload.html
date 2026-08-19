@@ -1,330 +1,146 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Upload Data - Table Agent</title>
-    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <style>
-        body {
-            font-family: 'Roboto', sans-serif;
-            background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            padding: 20px;
-        }
-        .upload-container {
-            background: white;
-            border-radius: 15px;
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
-            overflow: hidden;
-            max-width: 600px;
-            width: 100%;
-            margin: 0 auto;
-        }
-        .upload-header {
-            background: #4e73df;
-            color: white;
-            padding: 30px;
-            text-align: center;
-        }
-        .upload-body {
-            padding: 30px;
-        }
-        .upload-icon {
-            font-size: 64px;
-            color: #4e73df;
-            margin-bottom: 20px;
-        }
-        .file-input-wrapper {
-            position: relative;
-            overflow: hidden;
-            display: inline-block;
-            width: 100%;
-            margin-bottom: 20px;
-        }
-        .file-input-wrapper input[type=file] {
-            position: absolute;
-            left: 0;
-            top: 0;
-            opacity: 0;
-            cursor: pointer;
-            width: 100%;
-            height: 100%;
-        }
-        .file-input-button {
-            display: block;
-            background: #f8f9fc;
-            border: 2px dashed #d1d3e2;
-            border-radius: 10px;
-            padding: 40px 20px;
-            text-align: center;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        .file-input-button:hover {
-            background: #eef1f8;
-            border-color: #4e73df;
-        }
-        .file-name {
-            margin-top: 10px;
-            font-size: 14px;
-            color: #6e707e;
-        }
-        .btn-upload {
-            background: #4e73df;
-            border: none;
-            padding: 12px 25px;
-            font-size: 16px;
-            font-weight: 500;
-            border-radius: 50px;
-            transition: all 0.3s;
-            width: 100%;
-        }
-        .btn-upload:hover {
-            background: #2e59d9;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
-        }
-        .features {
-            display: flex;
-            justify-content: space-between;
-            margin-top: 30px;
-            text-align: center;
-        }
-        .feature {
-            flex: 1;
-            padding: 15px;
-        }
-        .feature i {
-            font-size: 24px;
-            color: #4e73df;
-            margin-bottom: 10px;
-        }
-        .feature h6 {
-            font-weight: 500;
-            margin-bottom: 5px;
-        }
-        .feature p {
-            font-size: 13px;
-            color: #6e707e;
-            margin: 0;
-        }
-        .alert {
-            margin-top: 20px;
-            display: none;
-        }
-        .progress {
-            height: 5px;
-            margin-top: 15px;
-            display: none;
-        }
-    </style>
-</head>
-<body>
-    <div class="upload-container">
-        <div class="upload-header">
-            <h2>Upload Your Data</h2>
-            <p class="mb-0">Upload a CSV file to start analyzing with Table Agent</p>
+﻿{% extends 'base.html' %}
+{% block title %}Upload Data - Baymax{% endblock %}
+{% block content %}
+<div class='upload-container'>
+    <div class='upload-header'>
+        <div class='logo-icon'><i class='fas fa-chart-line'></i></div>
+        <h1>Baymax</h1>
+        <p>Upload your data. Ask questions. Get instant insights.</p>
+    </div>
+    <div class='upload-card'>
+        <form id='uploadForm' method='post' enctype='multipart/form-data'>{% csrf_token %}
+            <div class='upload-zone' id='uploadZone'>
+                <div class='upload-icon'><i class='fas fa-cloud-upload-alt'></i></div>
+                <h5>Drop your file here</h5>
+                <p class='upload-hint'>or click to browse from your computer</p>
+                <input type='file' id='dataFile' name='data_file' accept='.csv,.xlsx,.xls' required hidden>
+            </div>
+            <div class='file-info-bar d-none' id='fileInfoBar'>
+                <span><i class='fas fa-file-alt me-2'></i><span id='fileName'>No file selected</span></span>
+                <span id='fileSize'></span>
+            </div>
+            <div class='progress-wrapper' id='progressWrapper'>
+                <div class='progress-bar-custom'>
+                    <div class='progress-bar-fill'></div>
+                </div>
+            </div>
+            <button type='submit' class='btn btn-primary btn-block btn-lg mt-3' id='uploadButton'>
+                <i class='fas fa-arrow-up-from-bracket me-2'></i>Upload &amp; Analyze
+            </button>
+        </form>
+        <div class='alert-custom success' id='successAlert'>
+            <i class='fas fa-check-circle'></i> Your file has been uploaded. Redirecting...
         </div>
-        <div class="upload-body">
-            <div class="text-center">
-                <div class="upload-icon">📊</div>
-                <h4 class="mb-4">Select Data File</h4>
-            </div>
-            
-            <form id="uploadForm" method="post" enctype="multipart/form-data">
-                {% csrf_token %}
-                <div class="file-input-wrapper">
-                    <div class="file-input-button" id="fileInputLabel">
-                        <i class="fas fa-cloud-upload-alt fa-2x mb-3"></i>
-                        <h5>Click to browse or drag & drop</h5>
-                        <p class="text-muted mb-0">CSV or Excel files (Max size: 100MB)</p>
-                    </div>
-                    <input type="file" id="dataFile" name="data_file" accept=".csv,.xlsx,.xls" required>
-                </div>
-                <div class="file-name text-center" id="fileName">No file selected</div>
-                
-                <button type="submit" class="btn btn-upload" id="uploadButton">
-                    <span id="uploadButtonText">Upload & Analyze</span>
-                </button>
-                
-                <div class="progress">
-                    <div class="progress-bar progress-bar-striped progress-bar-animated" 
-                         role="progressbar" style="width: 100%"></div>
-                </div>
-            </form>
-            
-            <div class="alert alert-success" role="alert" id="successAlert">
-                <strong>Success!</strong> Your file has been uploaded. Redirecting to analysis page...
-            </div>
-            
-            <div class="alert alert-danger" role="alert" id="errorAlert">
-                <strong>Error!</strong> <span id="errorMessage"></span>
-            </div>
-            
-            <div class="features">
-                <div class="feature">
-                    <div>🔍</div>
-                    <h6>Smart Analysis</h6>
-                    <p>AI-powered insights</p>
-                </div>
-                <div class="feature">
-                    <div>⚡</div>
-                    <h6>Fast Processing</h6>
-                    <p>Powered by Llama 3.3 70B</p>
-                </div>
-                <div class="feature">
-                    <div>🔒</div>
-                    <h6>Secure</h6>
-                    <p>Your data stays private</p>
-                </div>
-            </div>
+        <div class='alert-custom error' id='errorAlert'>
+            <i class='fas fa-exclamation-circle'></i> <span id='errorMessage'></span>
         </div>
     </div>
+    <div class='feature-grid'>
+        <div class='feature-card'>
+            <div class='feature-icon'><i class='fas fa-brain'></i></div>
+            <h6>AI-Powered</h6>
+            <p>Ask questions in plain English</p>
+        </div>
+        <div class='feature-card'>
+            <div class='feature-icon'><i class='fas fa-bolt'></i></div>
+            <h6>Instant Results</h6>
+            <p>Analysis in seconds, not hours</p>
+        </div>
+        <div class='feature-card'>
+            <div class='feature-icon'><i class='fas fa-lock'></i></div>
+            <h6>Private &amp; Secure</h6>
+            <p>Your data stays on your machine</p>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('uploadForm');
+    const uploadZone = document.getElementById('uploadZone');
+    const dataFile = document.getElementById('dataFile');
+    const fileInfoBar = document.getElementById('fileInfoBar');
+    const fileName = document.getElementById('fileName');
+    const fileSize = document.getElementById('fileSize');
+    const uploadButton = document.getElementById('uploadButton');
+    const progressWrapper = document.getElementById('progressWrapper');
+    const successAlert = document.getElementById('successAlert');
+    const errorAlert = document.getElementById('errorAlert');
+    const errorMessage = document.getElementById('errorMessage');
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script>
-        document.getElementById('dataFile').addEventListener('change', function(e) {
-            const fileName = e.target.files[0] ? e.target.files[0].name : 'No file selected';
-            document.getElementById('fileName').textContent = fileName;
-        });
-        
-        document.getElementById('uploadForm').addEventListener('submit', async function(e) {
-            e.preventDefault();
-            
-            const fileInput = document.getElementById('dataFile');
-            const uploadButton = document.getElementById('uploadButton');
-            const uploadButtonText = document.getElementById('uploadButtonText');
-            const progressBar = document.querySelector('.progress');
-            const successAlert = document.getElementById('successAlert');
-            const errorAlert = document.getElementById('errorAlert');
-            const errorMessage = document.getElementById('errorMessage');
-            
-            // Check if a file is selected
-            if (!fileInput.files || !fileInput.files[0]) {
-                errorMessage.textContent = 'Please select a file to upload.';
-                errorAlert.style.display = 'block';
-                return;
-            }
-            
-            // Show progress and disable button
-            progressBar.style.display = 'block';
-            uploadButton.disabled = true;
-            uploadButtonText.textContent = 'Uploading...';
-            
-            // Hide any previous alerts
-            successAlert.style.display = 'none';
-            errorAlert.style.display = 'none';
-            
-            // Create form data
-            const formData = new FormData();
-            formData.append('data_file', fileInput.files[0]);
-            formData.append('csrfmiddlewaretoken', document.querySelector('[name=csrfmiddlewaretoken]').value);
-            
-           // ... inside the submit event listener ...
-try {
-    const response = await fetch(window.location.href, { // Uses current URL for upload
-        method: 'POST',
-        body: formData // Sends multipart/form-data
+    uploadZone.addEventListener('click', function(e) {
+        if (e.target !== dataFile) dataFile.click();
+    });
+    uploadZone.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        uploadZone.classList.add('drag-over');
+    });
+    uploadZone.addEventListener('dragleave', function() {
+        uploadZone.classList.remove('drag-over');
+    });
+    uploadZone.addEventListener('drop', function(e) {
+        e.preventDefault();
+        uploadZone.classList.remove('drag-over');
+        if (e.dataTransfer.files.length) {
+            dataFile.files = e.dataTransfer.files;
+            updateFileInfo(e.dataTransfer.files[0]);
+        }
+    });
+    dataFile.addEventListener('change', function() {
+        if (dataFile.files[0]) updateFileInfo(dataFile.files[0]);
     });
 
-    // --- CRITICAL: Check if the HTTP response status is OK ---
-    if (!response.ok) {
-        // If status is not 2xx, the response is not successful
-        const errorText = await response.text(); // Get error text from response body
-        console.error(`HTTP error! Status: ${response.status}, Body: ${errorText}`);
-        errorMessage.textContent = `Network error: HTTP ${response.status} - ${errorText}`;
-        errorAlert.style.display = 'block';
-        successAlert.style.display = 'none';
-        progressBar.style.display = 'none';
-        uploadButton.disabled = false;
-        uploadButtonText.textContent = 'Upload & Analyze';
-        return; // Exit early on HTTP error
+    function updateFileInfo(file) {
+        fileName.textContent = file.name;
+        const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
+        fileSize.textContent = sizeMB + ' MB';
+        fileInfoBar.classList.remove('d-none');
     }
 
-    // --- CRITICAL: Attempt to parse the JSON response ---
-    let data;
-    try {
-        data = await response.json();
-        console.log("Successfully parsed JSON response:", data); // Log the parsed data
-    } catch (jsonError) {
-        // If parsing fails, log the raw response text
-        const rawResponse = await response.text();
-        console.error("Failed to parse JSON response:", jsonError);
-        console.error("Raw response text:", rawResponse);
-        errorMessage.textContent = `Server returned invalid JSON: ${jsonError.message}`;
-        errorAlert.style.display = 'block';
-        successAlert.style.display = 'none';
-        progressBar.style.display = 'none';
-        uploadButton.disabled = false;
-        uploadButtonText.textContent = 'Upload & Analyze';
-        return; // Exit early on JSON parse error
-    }
-
-    // --- CRITICAL: Check the data structure and conditions for redirect ---
-    // Ensure 'data' is an object and has the expected properties
-    if (typeof data === 'object' && data !== null) {
-        const status = data.status;
-        const redirectUrl = data.redirect_url;
-
-        console.log("Checking redirect conditions: status =", status, ", redirect_url =", redirectUrl);
-
-        if (status === 'success' && redirectUrl) {
-            console.log("Success condition met, redirecting to:", redirectUrl);
-            // Show success message
-            successAlert.style.display = 'block';
-            errorAlert.style.display = 'none'; // Hide error if it was shown before
-
-            // Clear the file input
-            document.getElementById('dataFile').value = '';
-
-            // Attempt the redirect
-            // Using setTimeout to allow UI updates before redirect
-            setTimeout(() => {
-                console.log("Executing window.location.href redirect...");
-                window.location.href = redirectUrl; // Use the URL provided by the server
-                console.log("Redirect command sent to browser.");
-            }, 1500); // 1.5 second delay
-        } else {
-            // If status is not success or redirect_url is missing
-            console.error("Server responded with success=false or missing redirect_url. Full data:", data);
-            errorMessage.textContent = data.message || 'Server responded with success=false or missing redirect URL.';
-            errorAlert.style.display = 'block';
-            successAlert.style.display = 'none'; // Hide success if it was shown
-
-            // Reset button state
-            progressBar.style.display = 'none';
-            uploadButton.disabled = false;
-            uploadButtonText.textContent = 'Upload & Analyze';
+    form.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const file = dataFile.files[0];
+        if (!file) { showError('Please select a file to upload.'); return; }
+        const allowed = ['.csv', '.xlsx', '.xls'];
+        if (!allowed.some(function(ext) { return file.name.toLowerCase().endsWith(ext); })) {
+            showError('Invalid file type. Use CSV or Excel.'); return;
         }
-    } else {
-        // If 'data' is not an object
-        console.error("Server response data is not an object. Type:", typeof data, "Value:", data);
-        errorMessage.textContent = 'Server returned unexpected response format.';
-        errorAlert.style.display = 'block';
-        successAlert.style.display = 'none';
-        progressBar.style.display = 'none';
-        uploadButton.disabled = false;
-        uploadButtonText.textContent = 'Upload & Analyze';
+        if (file.size > 100 * 1024 * 1024) { showError('File too large (max 100MB).'); return; }
+
+        successAlert.classList.remove('active');
+        errorAlert.classList.remove('active');
+        uploadButton.disabled = true;
+        uploadButton.innerHTML = '<span class=\"spinner-border spinner-border-sm me-2\"></span>Uploading...';
+        progressWrapper.classList.add('active');
+
+        const formData = new FormData();
+        formData.append('data_file', file);
+        formData.append('csrfmiddlewaretoken', form.querySelector('[name=csrfmiddlewaretoken]').value);
+
+        try {
+            const response = await fetch(window.location.href, { method: 'POST', body: formData });
+            if (!response.ok) { throw new Error('HTTP ' + response.status); }
+            const data = await response.json();
+            if (data.status === 'success' && data.redirect_url) {
+                successAlert.classList.add('active');
+                setTimeout(function() { window.location.href = data.redirect_url; }, 1200);
+            } else {
+                showError(data.message || 'Upload failed.');
+            }
+        } catch (err) {
+            showError(err.message);
+        } finally {
+            uploadButton.disabled = false;
+            uploadButton.innerHTML = '<i class=\"fas fa-arrow-up-from-bracket me-2\"></i>Upload &amp; Analyze';
+            progressWrapper.classList.remove('active');
+        }
+    });
+
+    function showError(msg) {
+        errorMessage.textContent = msg;
+        errorAlert.classList.add('active');
     }
-
-} catch (error) {
-    // Catch network errors (e.g., server down, CORS issues) that occur *before* response is received
-    console.error('Network fetch error:', error);
-    errorMessage.textContent = 'Network error: ' + error.message;
-    errorAlert.style.display = 'block';
-    successAlert.style.display = 'none';
-
-    // Reset button state
-    progressBar.style.display = 'none';
-    uploadButton.disabled = false;
-    uploadButtonText.textContent = 'Upload & Analyze';
-}
-// ... rest of the catch block ...
-        });
-    </script>
-</body>
-</html>
+});
+</script>
+{% endblock %}
