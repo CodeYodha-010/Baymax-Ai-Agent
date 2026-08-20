@@ -1,5 +1,5 @@
-﻿/* ============================================================
-   Baymax AI Agent — Premium Design System
+﻿¿/* ============================================================
+   Baymax AI Agent â€” Premium Design System
    Typography-First | 8px Grid | Full Spectrum Color
    ============================================================ */
 
@@ -1344,4 +1344,3 @@ a:hover { color: var(--primary-700); }
     .chat-header h3 { font-size: var(--text-lg); }
     .upload-zone { padding: var(--space-10) var(--space-4); }
     .chat-messages { padding: var(--space-4); }
-}
