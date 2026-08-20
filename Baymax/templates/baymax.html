@@ -1,32 +1,57 @@
-{% extends 'base.html' %}
-{% load static %}
+﻿{% extends "base.html" %}
 {% block title %}Baymax{% endblock %}
+
 {% block content %}
-<div class='chat-container' style='justify-content:center;align-items:center;text-align:center;padding:40px 20px;'>
-    <div style='font-size:56px;font-weight:700;color:#2d2d2d;margin-bottom:10px;'>Baymax</div>
-    <div style='font-size:18px;color:#6e707e;margin-bottom:30px;'>What can I assist you with?</div>
-    <a href='{% url 'upload' %}' class='btn btn-primary' style='padding:14px 36px;font-size:18px;border-radius:50px;text-decoration:none;'>Get Started</a>
-    <div class='row mt-5 text-center'>
-        <div class='col-md-4 mb-3'>
-            <div class='p-3'><i class='fas fa-upload fa-2x text-primary mb-2'></i><h6>Upload</h6><p class='text-muted small'>CSV or Excel data</p></div>
+<section style="min-height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 96px 32px; background: var(--bg);">
+  <div style="max-width: 800px;">
+    <h1 style="font-family: var(--font-display); font-size: clamp(2.5rem, 6vw, 4.5rem); font-weight: 700; line-height: 1.1; color: var(--text); margin-bottom: 24px; letter-spacing: -0.02em;">
+      Ask your data. Get answers.
+    </h1>
+    <p style="font-size: clamp(1.125rem, 2.5vw, 1.375rem); color: var(--text-secondary); line-height: 1.7; margin-bottom: 64px; max-width: 600px; margin-left: auto; margin-right: auto;">
+      Upload a CSV or Excel file and ask questions in plain English. Baymax writes the code, runs the analysis, and visualizes the results — instantly.
+    </p>
+    <a href="{% url 'upload' %}" style="display: inline-block; font-size: 1.125rem; padding: 16px 32px; border-radius: 9999px; background: linear-gradient(to bottom, var(--primary-600), var(--primary-800)); color: #fff; text-decoration: none; font-weight: 600;">
+      Get Started
+    </a>
+  </div>
+</section>
+
+<section style="padding: 80px 32px; background: var(--bg-warm);">
+  <div style="max-width: 1200px; margin: 0 auto;">
+    <h2 style="font-family: var(--font-display); font-size: clamp(2rem, 4vw, 3rem); font-weight: 600; text-align: center; color: var(--text); margin-bottom: 64px;">Why Baymax</h2>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 32px;">
+      <div style="padding: 32px; background: var(--card); border: 1px solid var(--border-light); border-radius: 16px; box-shadow: 0 2px 4px -2px rgba(0,0,0,0.04);">
+        <div style="width: 56px; height: 56px; border-radius: 12px; background: var(--primary-100); display: flex; align-items: center; justify-content: center; color: var(--primary-600); font-size: 24px; margin-bottom: 16px;">
+          <i class="fa-solid fa-bolt"></i>
         </div>
-        <div class='col-md-4 mb-3'>
-            <div class='p-3'><i class='fas fa-comments fa-2x text-primary mb-2'></i><h6>Ask</h6><p class='text-muted small'>Questions in plain English</p></div>
+        <h3 style="font-family: var(--font-body); font-size: 1.25rem; font-weight: 600; color: var(--text); margin-bottom: 8px;">Instant Analysis</h3>
+        <p style="color: var(--text-muted); line-height: 1.7;">Ask in plain English. Get charts, tables, and insights in seconds — no SQL required.</p>
+      </div>
+      <div style="padding: 32px; background: var(--card); border: 1px solid var(--border-light); border-radius: 16px; box-shadow: 0 2px 4px -2px rgba(0,0,0,0.04);">
+        <div style="width: 56px; height: 56px; border-radius: 12px; background: var(--primary-100); display: flex; align-items: center; justify-content: center; color: var(--primary-600); font-size: 24px; margin-bottom: 16px;">
+          <i class="fa-solid fa-lock"></i>
         </div>
-        <div class='col-md-4 mb-3'>
-            <div class='p-3'><i class='fas fa-chart-bar fa-2x text-primary mb-2'></i><h6>Visualize</h6><p class='text-muted small'>Interactive charts</p></div>
+        <h3 style="font-family: var(--font-body); font-size: 1.25rem; font-weight: 600; color: var(--text); margin-bottom: 8px;">Private & Secure</h3>
+        <p style="color: var(--text-muted); line-height: 1.7;">Your data stays on your machine. We never store or share your files. Full control, always.</p>
+      </div>
+      <div style="padding: 32px; background: var(--card); border: 1px solid var(--border-light); border-radius: 16px; box-shadow: 0 2px 4px -2px rgba(0,0,0,0.04);">
+        <div style="width: 56px; height: 56px; border-radius: 12px; background: var(--primary-100); display: flex; align-items: center; justify-content: center; color: var(--primary-600); font-size: 24px; margin-bottom: 16px;">
+          <i class="fa-solid fa-code"></i>
         </div>
+        <h3 style="font-family: var(--font-body); font-size: 1.25rem; font-weight: 600; color: var(--text); margin-bottom: 8px;">Code Transparency</h3>
+        <p style="color: var(--text-muted); line-height: 1.7;">See the exact pandas code generated. Verify, modify, and learn from every analysis.</p>
+      </div>
     </div>
-    <div style='position:relative;width:160px;height:160px;margin:40px auto 0;border-radius:50%;background:#e0e0e0;display:flex;align-items:center;justify-content:center;overflow:hidden;'>
-        <img src='{% static "baymax.png" %}' alt='Baymax' style='width:100%;height:100%;object-fit:cover;border-radius:50%;'>
-        <div style='position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:60px;height:40px;'>
-            <div style='position:relative;width:100%;height:100%;'>
-                <div style='position:absolute;left:8px;top:50%;transform:translateY(-50%);width:10px;height:10px;background:#2d2d2d;border-radius:50%;'></div>
-                <div style='position:absolute;right:8px;top:50%;transform:translateY(-50%);width:10px;height:10px;background:#2d2d2d;border-radius:50%;'></div>
-                <div style='position:absolute;bottom:4px;left:50%;transform:translateX(-50%);width:20px;height:2px;background:#2d2d2d;border-radius:1px;'></div>
-            </div>
-        </div>
-    </div>
-    <footer class='mt-5 text-muted small'>Powered by OpenRouter</footer>
-</div>
-{% endblock %}
+  </div>
+</section>
+
+<section style="padding: 80px 32px; text-align: center; background: var(--primary-700); color: #fff;">
+  <h2 style="font-family: var(--font-display); font-size: clamp(2rem, 4vw, 3rem); font-weight: 600; margin-bottom: 16px;">Ready to analyze your data?</h2>
+  <p style="color: rgba(255,255,255,0.8); font-size: 1.125rem; margin-bottom: 32px; max-width: 600px; margin-left: auto; margin-right: auto;">Upload your first file and ask a question — it takes 30 seconds.</p>
+  <a href="{% url 'upload' %}" style="display: inline-block; background: #fff; color: var(--primary-700); font-size: 1.125rem; padding: 16px 32px; border-radius: 9999px; text-decoration: none; font-weight: 600;">Get Started</a>
+</section>
+
+<footer style="padding: 32px; text-align: center; border-top: 1px solid var(--border-light); background: var(--bg);">
+  <p style="color: var(--text-muted); font-size: 0.875rem; margin: 0;">Powered by OpenRouter</p>
+</footer>
+{% endblock content %}
