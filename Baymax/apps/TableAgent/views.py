@@ -145,9 +145,17 @@ def safe_execute_code(code_string: str, df: pd.DataFrame) -> dict:
         print_output = mystdout.getvalue()
         result = local_vars.get('result', 'No result variable found')
 
-        # Fallback: if result is string/None, scan for the most recent DataFrame/Series
-        # The LLM often forgets to assign result or assigns a string description instead
-        if not isinstance(result, (pd.DataFrame, pd.Series)):
+        # Scalars (int/float/str/bool/np scalars) are VALID answers — keep them.
+        # Only fall back to scanning local vars when result is missing/None,
+        # so a scalar like `result = len(df)` is never overwritten by a temp DF.
+        is_missing = (
+            result is None
+            or (isinstance(result, str) and result in ('No result variable found', 'None', ''))
+        )
+        is_df_or_series = isinstance(result, (pd.DataFrame, pd.Series))
+        is_valid_scalar = (not is_missing) and (not is_df_or_series)
+
+        if is_missing:
             last_chartable = None
             for key, val in local_vars.items():
                 if key in ('df', 'pd', 'np', 'result'):
@@ -241,7 +249,11 @@ def generate_rich_schema(df: pd.DataFrame) -> dict:
             if unique_count <= 50:
                 col_info["examples"] = df[col].dropna().unique().tolist()[:10]
             else:
-                col_info["examples"] = ["(hidden - many unique values)"]
+                # High-cardinality column: give the LLM REAL top values instead of
+                # "(hidden)" so it never invents filter values that don't exist.
+                top_vals = df[col].value_counts().head(10)
+                col_info["examples"] = [str(idx_val) for idx_val in top_vals.index.tolist()]
+                col_info["examples_note"] = "top 10 most frequent values (real data)"
         else:
             col_info["classification"] = "other"
 
@@ -631,6 +643,9 @@ CRITICAL RULES FOR DATA QUESTIONS:
   - For comparisons: show a ranked list with values
 - Handle null values with .isna() / .dropna()
 - Verify column names match the schema exactly
+- NEVER filter on exact values (df[df['col'] == 'value']) unless that exact value appears in the Dataset Schema examples or Sample Data. If the value is not visible to you, it may not exist — use groupby / sort_values / nlargest / idxmax instead of guessing values.
+- To answer "highest/lowest/top N" questions: use sort_values().head() / nlargest / idxmax on the real data — NEVER guess the winning value first and filter for it.
+- For "how many rows/records" questions: assign result = len(df), or build a descriptive string by concatenation, e.g. result = "Dataset has " + str(len(df)) + " rows and " + str(len(df.columns)) + " columns"
 - Wrap operations in try/except for safety
 
 CHARTING RULES (VERY IMPORTANT):
@@ -778,10 +793,14 @@ def strip_matplotlib(code: str) -> str:
                     result_assigned = True
                 continue
 
-        # Remove string result assignments (e.g. result = "Chart created")
-        # These overwrite the transformed data assignment and kill the chart
+        # Drop placeholder string results that would kill a real chart
+        # e.g. result = "Chart created" after a plot transform.
+        # Keep legit string answers (counts, greetings, summaries).
         if re.match(r'^result\s*=\s*["\']', stripped):
-            continue
+            if result_assigned:
+                continue
+            if re.search(r'chart|plot|graph|saved|created|image|png|jpg|svg|matplotlib|plt\.', stripped, re.IGNORECASE):
+                continue
 
         # Skip savefig calls
         if 'savefig' in stripped:
@@ -802,6 +821,10 @@ def strip_matplotlib(code: str) -> str:
 # =============================================================================
 # DATA ANALYSIS AGENT (Single-shot + retry)
 # =============================================================================
+
+# --- Router fast-path toggle. Set USE_ROUTER=False to force original code-gen agent. ---
+USE_ROUTER = os.getenv('USE_ROUTER', 'True').lower() == 'true'
+
 
 class DataAnalysisAgent:
     """Simplified agent: generate code → execute → retry on error → return result.
@@ -826,13 +849,50 @@ class DataAnalysisAgent:
         sample += f"First 10 rows:\n{head.to_string()}"
         return sample
 
-    def analyze(self, query: str, schema: dict) -> Generator[dict, None, None]:
-        """Yield SSE events. Single-shot code generation with retry."""
+    def analyze(self, query: str, schema: dict, use_router: bool = None) -> Generator[dict, None, None]:
+        """Yield SSE events. Router fast-path (optional) + code-gen with retry."""
         logger.info(f"[AGENT] Query: '{query}'")
         yield {"type": "thinking", "content": "Analyzing your question..."}
 
+        # --- Router fast-path: cheap classify -> deterministic pandas (NO exec).
+        # Falls through to original code-gen agent on low confidence / complex.
+        # use_router: True/False overrides the server default (from frontend toggle).
+        router_enabled = USE_ROUTER if use_router is None else bool(use_router)
+        if router_enabled:
+            try:
+                from .router import LLMRouter, DeterministicExecutor, ROUTER_CONFIDENCE_THRESHOLD
+                route = LLMRouter(self.client).route(query, schema)
+                conf = float(route.get("confidence", 0.0) or 0.0)
+                intent = route.get("intent", "complex")
+                logger.info(f"[ROUTER] intent={intent} conf={conf} route={route}")
+                if intent != "complex" and conf >= ROUTER_CONFIDENCE_THRESHOLD:
+                    out = DeterministicExecutor(self.df).run(route)
+                    if out.get("ok"):
+                        raw_output = str(out.get("raw_output", ""))
+                        result_value = out.get("result")
+                        yield {"type": "thinking", "content": "\nFast-path: direct computation (no code generation)..."}
+                        chart_data = extract_chart_data(result_value)
+                        if chart_data:
+                            yield {"type": "chart", "chart": chart_data}
+                        df_payload = extract_df_payload(result_value)
+                        if df_payload:
+                            yield {"type": "data", "payload": df_payload}
+                        try:
+                            human_answer = self.client.humanize_result(query, raw_output)
+                        except Exception as e:
+                            logger.error(f"[ROUTER] Humanize failed: {e}")
+                            human_answer = raw_output[:2000]
+                        yield {"type": "result", "answer": human_answer, "raw_data": raw_output[:2000], "status": "success", "path": "router"}
+                        return
+                    logger.info("[ROUTER] Executor declined, falling back to code-gen agent")
+                else:
+                    logger.info("[ROUTER] Low confidence/complex, using code-gen agent")
+            except Exception as e:
+                logger.warning(f"[ROUTER] Fast-path failed, falling back: {e}")
+
         sample_data = self._build_sample_data()
         error_context = ""
+        empty_retry_used = False  # allow ONE dedicated retry when code runs but returns 0 rows
 
         for attempt in range(1, MAX_RETRIES + 1):
             logger.info(f"[AGENT] Attempt {attempt}/{MAX_RETRIES}")
@@ -864,6 +924,25 @@ class DataAnalysisAgent:
                 result_value = exec_result.get("result")
                 logger.info(f"[AGENT] Code executed successfully ({len(raw_output)} chars). Result type: {type(result_value).__name__}")
 
+                # Empty-result guard: code ran fine but matched 0 rows — usually a
+                # hallucinated filter value. Retry ONCE with a corrective hint.
+                result_is_empty = (
+                    isinstance(result_value, (pd.DataFrame, pd.Series)) and len(result_value) == 0
+                )
+                if result_is_empty and not empty_retry_used:
+                    empty_retry_used = True
+                    logger.warning("[AGENT] Exec succeeded but result is EMPTY — retrying with hint")
+                    yield {"type": "step_log", "content": "Result was empty (0 rows) — verifying filters and retrying..."}
+                    error_context = (
+                        f"Previous code:\n```python\n{code}\n```\n\n"
+                        "The code ran WITHOUT errors but returned an EMPTY result (0 rows). "
+                        "This usually means a filter value or column name does not exist in the data. "
+                        "Re-check every column name and filter value against the Dataset Schema examples "
+                        "(use ONLY values that appear there). Prefer groupby/sort_values/nlargest over "
+                        "equality filters. Generate corrected code."
+                    )
+                    continue
+
                 # B1: Emit chart event if result is chartable
                 chart_data = extract_chart_data(result_value)
                 if chart_data:
@@ -882,7 +961,7 @@ class DataAnalysisAgent:
                 except Exception as e:
                     logger.error(f"[AGENT] Humanize failed: {e}")
                     human_answer = raw_output[:2000]
-                yield {"type": "result", "answer": human_answer, "raw_data": raw_output[:2000], "status": "success"}
+                yield {"type": "result", "answer": human_answer, "raw_data": raw_output[:2000], "status": "success", "path": "codegen"}
                 return
 
             # Step 4: Code failed — try auto-correction first
@@ -916,7 +995,7 @@ class DataAnalysisAgent:
                     except Exception as e:
                         logger.error(f"[AGENT] Humanize failed (auto-corrected): {e}")
                         human_answer = raw_output[:2000]
-                    yield {"type": "result", "answer": human_answer, "raw_data": raw_output[:2000], "status": "success"}
+                    yield {"type": "result", "answer": human_answer, "raw_data": raw_output[:2000], "status": "success", "path": "codegen"}
                     return
 
             # Auto-correction didn't work — feed error to LLM on next attempt
@@ -1044,8 +1123,13 @@ class AskQuestionView(View):
             client = LLMClient()
             agent = DataAnalysisAgent(client, df)
 
+            # Frontend toggle can override the server-side USE_ROUTER default.
+            use_router = data.get('use_router', None)
+            if use_router is not None:
+                use_router = bool(use_router)
+
             def event_stream():
-                for event in agent.analyze(query, schema):
+                for event in agent.analyze(query, schema, use_router=use_router):
                     logger.debug(f"[ASK] SSE event: {event['type']}")
                     yield f"data: {json.dumps(event, cls=NumpyEncoder)}\n\n"
                 logger.info(f"[ASK] Stream complete for query: '{query}'")
