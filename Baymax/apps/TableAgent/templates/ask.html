@@ -41,6 +41,16 @@
                     <i class='fas fa-chart-bar me-2'></i>Chart Builder
                 </a>
             </div>
+            <div class='sidebar-section mt-2'>
+                <div class='form-check form-switch'>
+                    <input class='form-check-input' type='checkbox' id='routerToggle' checked>
+                    <label class='form-check-label' for='routerToggle' style='font-size:0.85rem;'>
+                        <i class='fas fa-bolt me-1'></i>Fast-path Router
+                    </label>
+                </div>
+                <small class='text-muted' style='font-size:0.72rem;'>ON = instant answers for simple questions. OFF = always full AI code analysis.</small>
+            </div>
+
         </div>
         <div class='main-content'>
             <div class='chat-messages' id='chatMessages'>
@@ -80,6 +90,29 @@
 </div>
 {% endblock %}
 {% block scripts %}
+<style>
+    .path-badge {
+        display: inline-block;
+        font-size: 0.68rem;
+        font-weight: 600;
+        padding: 2px 10px;
+        border-radius: 999px;
+        margin-bottom: 6px;
+        margin-right: 6px;
+        vertical-align: middle;
+    }
+    .path-badge i { margin-right: 4px; }
+    .path-badge.path-fast {
+        background: rgba(28, 200, 138, 0.15);
+        color: #1cc88a;
+        border: 1px solid rgba(28, 200, 138, 0.4);
+    }
+    .path-badge.path-codegen {
+        background: rgba(78, 115, 223, 0.12);
+        color: #4e73df;
+        border: 1px solid rgba(78, 115, 223, 0.35);
+    }
+</style>
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     const form = document.getElementById('questionForm');
@@ -87,6 +120,24 @@ document.addEventListener('DOMContentLoaded', function() {
     const questionInput = document.getElementById('questionInput');
     const typingIndicator = document.getElementById('typingIndicator');
     const askButton = document.getElementById('askButton');
+    const routerToggle = document.getElementById('routerToggle');
+
+    // Restore router toggle from localStorage (default ON)
+    const savedRouter = localStorage.getItem('baymax_router');
+    if (savedRouter !== null) routerToggle.checked = savedRouter === 'true';
+    routerToggle.addEventListener('change', function() {
+        localStorage.setItem('baymax_router', routerToggle.checked);
+    });
+
+    function addPathBadge(agentMsg, path) {
+        if (!agentMsg || !path) return;
+        const badge = document.createElement('span');
+        badge.className = 'path-badge ' + (path === 'router' ? 'path-fast' : 'path-codegen');
+        badge.innerHTML = path === 'router'
+            ? '<i class=\"fas fa-bolt\"></i> Fast-path'
+            : '<i class=\"fas fa-brain\"></i> Code-gen';
+        agentMsg.querySelector('.message-content').prepend(badge);
+    }
 
     form.addEventListener('submit', async function(e) {
         e.preventDefault();
@@ -103,7 +154,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const response = await fetch('{% url "ask" %}', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
-                body: JSON.stringify({ query: question })
+                body: JSON.stringify({ query: question, use_router: routerToggle.checked })
             });
             if (!response.ok) throw new Error('Server error: ' + response.status);
 
@@ -172,6 +223,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                 break;
                             case 'result':
                                 if (!agentMsg) agentMsg = addAgentMessage('');
+                                addPathBadge(agentMsg, event.path);
                                 const rt = agentMsg.querySelector('.result-text');
                                 if (rt) {
                                     rt.innerHTML = renderMarkdown(event.answer);
