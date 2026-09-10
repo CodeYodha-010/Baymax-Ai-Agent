@@ -129,10 +129,17 @@ LOGGING = {
             'class': 'logging.StreamHandler',
             'formatter': 'verbose',
         },
+        'table_agent_file': {
+            'class': 'logging.FileHandler',
+            'filename': str(BASE_DIR / 'table_agent.log'),
+            'formatter': 'verbose',
+            'mode': 'w',
+            'encoding': 'utf-8',
+        },
     },
     'loggers': {
         'apps.TableAgent': {
-            'handlers': ['console'],
+            'handlers': ['console', 'table_agent_file'],
             'level': 'INFO',
             'propagate': False,
         },
