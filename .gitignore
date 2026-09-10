@@ -31,3 +31,9 @@ claude
 # Windows reserved names
 nul
 NUL
+
+# Local dev artifacts (never commit)
+.kilo/
+*_backup.py
+*backup*.py
+Baymax/staticfiles/
