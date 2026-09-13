@@ -56,8 +56,11 @@ def resolve_column(name, columns):
 
 
 def _parse_router_json(text):
-    """Extract JSON object from router LLM reply (raw, fenced, or noisy)."""
-    if not text:
+    """Extract JSON object from router LLM reply (raw, fenced, or noisy).
+
+    Returns None for non-string input — never raises.
+    """
+    if not text or not isinstance(text, str):
         return None
     t = text.strip()
     m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", t, re.DOTALL | re.IGNORECASE)
@@ -73,6 +76,33 @@ def _parse_router_json(text):
         return None
 
 
+def _extract_content(reply):
+    """Extract assistant text from LLMClient._call()'s model_dump() dict.
+
+    Returns "" on any failure (error dict, wrong shape) — callers treat
+    empty text as "no usable reply" and fall back. Never raises.
+    """
+    try:
+        if not isinstance(reply, dict) or "error" in reply:
+            return ""
+        choices = reply.get("choices") or []
+        if not choices:
+            return ""
+        msg = choices[0].get("message", {}) or {}
+        content = msg.get("content", "") or ""
+        return content if isinstance(content, str) else ""
+    except Exception:
+        return ""
+
+
+def _build_messages(system: str, query) -> list:
+    """Build a proper OpenAI messages list (system + user)."""
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": "Question: " + str(query)},
+    ]
+
+
 class LLMRouter:
     """Cheap classifier: query + schema -> route dict. Uses views.LLMClient."""
 
@@ -84,11 +114,12 @@ class LLMRouter:
         names = [c.get("name") for c in cols if isinstance(c, dict) and c.get("name")] or list(cols)
         system = ROUTER_SYSTEM_PROMPT.format(columns=", ".join([str(c) for c in names]) or "(unknown)")
         try:
-            reply = self.client._call(system, "Question: " + str(query))
+            reply = self.client._call(_build_messages(system, query))
         except Exception as e:
             logger.warning("[ROUTER] LLM call failed: %s", e)
             return {"intent": "complex", "confidence": 0.0}
-        data = _parse_router_json(reply or "")
+        text = _extract_content(reply)
+        data = _parse_router_json(text) if isinstance(text, str) else None
         if not isinstance(data, dict):
             return {"intent": "complex", "confidence": 0.0}
         valid = {"greeting", "aggregation", "top_n", "bottom_n", "count_filter",
