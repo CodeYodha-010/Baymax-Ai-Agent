@@ -303,7 +303,13 @@ def parse_error(error_msg: str) -> dict:
 
 
 def extract_code_from_response(text: str) -> str:
-    """Extract Python code from LLM response. Handles markdown code blocks and raw JSON."""
+    """Extract Python code from LLM response. Handles markdown code blocks and raw JSON.
+
+    Returns "" for non-string input (e.g. provider returned content=None).
+    Never raises.
+    """
+    if not isinstance(text, str):
+        return ""
     # Try to find code in markdown code blocks
     code_match = re.search(r'```(?:python)?\s*\n(.*?)```', text, re.DOTALL)
     if code_match:
@@ -331,7 +337,12 @@ def extract_code_from_response(text: str) -> str:
 
 
 def extract_thinking_from_response(text: str) -> str:
-    """Extract thinking/explanation from LLM response."""
+    """Extract thinking/explanation from LLM response.
+
+    Returns "" for non-string input. Never raises.
+    """
+    if not isinstance(text, str):
+        return ""
     # Try JSON "thinking" field
     try:
         data = json.loads(text)
@@ -705,7 +716,12 @@ Fix the error and generate corrected code."""
         if "error" in response:
             return {"error": response["error"]}
 
-        content = response["choices"][0]["message"]["content"]
+        content = response["choices"][0]["message"].get("content") or ""
+        if not content.strip():
+            # Transient provider quirk (reasoning-only / empty completion).
+            # Return a retryable error instead of crashing downstream.
+            logger.warning("[LLM] Provider returned empty content; will retry")
+            return {"error": "EMPTY_CONTENT: LLM returned no content. Please retry the request."}
         code = extract_code_from_response(content)
         thinking = extract_thinking_from_response(content)
 
@@ -902,7 +918,14 @@ class DataAnalysisAgent:
             result = self.client.generate_code(schema, query, sample_data, str(error_context))
 
             if "error" in result:
-                yield {"type": "error", "message": f"AI Error: {result['error']}"}
+                err = str(result["error"])
+                # Transient provider quirk: empty completion (reasoning-only reply).
+                # Retry within the existing attempt budget instead of killing the stream.
+                if err.startswith("EMPTY_CONTENT") and attempt < MAX_RETRIES:
+                    logger.warning(f"[AGENT] Empty LLM reply on attempt {attempt} — retrying")
+                    yield {"type": "step_log", "content": f"AI returned an empty reply (attempt {attempt}) — retrying..."}
+                    continue
+                yield {"type": "error", "message": f"AI Error: {err}"}
                 return
 
             code = result["code"]
