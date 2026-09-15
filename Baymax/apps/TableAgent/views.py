@@ -841,16 +841,110 @@ def strip_matplotlib(code: str) -> str:
 # --- Router fast-path toggle. Set USE_ROUTER=False to force original code-gen agent. ---
 USE_ROUTER = os.getenv('USE_ROUTER', 'True').lower() == 'true'
 
+# --- Planner toggle (server default). Planner runs only for complex queries unless
+# forced on/off via the "Deep Plan" frontend toggle (use_planner). Set USE_PLANNER=False
+# to disable the planner entirely. ---
+USE_PLANNER = os.getenv('USE_PLANNER', 'True').lower() == 'true'
+
+
+# =============================================================================
+# DATA ANALYSIS AGENT
+# =============================================================================
 
 class DataAnalysisAgent:
-    """Simplified agent: generate code → execute → retry on error → return result.
+    """Simplified agent: router fast-path → optional planner → generate code → execute → retry.
 
     Flow:
-    1. One LLM call generates pandas code
-    2. Code is executed
-    3. If error → auto-correct or feed error back to LLM (max 3 attempts)
-    4. If success → humanize result into friendly answer
+    1. Router fast-path for simple queries (deterministic pandas)
+    2. Planner decomposes complex queries into ordered pandas steps
+    3. One LLM call generates pandas code per step (or per query)
+    4. Code is executed; on error → retry with error context
+    5. Humanize result into friendly answer
     """
+
+    def _run_plan(self, query: str, schema: dict, steps: list) -> Generator[dict, None, None]:
+        """Execute validated plan steps, one scoped codegen+exec per step.
+
+        Each step gets ONE scoped retry. Failed steps are skipped (never abort
+        the plan). Step outputs accumulate into step_context for later steps
+        and the final humanized answer. Path badge: "planner".
+        """
+        logger.info(f"[PLANNER] Executing {len(steps)} steps")
+        yield {"type": "plan", "steps": steps}
+        yield {"type": "step_log", "content": f"Deep plan: {len(steps)} steps..."}
+
+        sample_data = self._build_sample_data()
+        step_context = ""
+        plan_raw_output = ""
+
+        for step in steps:
+            sid = step.get("id")
+            goal = step.get("goal", "")
+            kind = step.get("kind", "lookup")
+            logger.info(f"[PLANNER] Step {sid}/{len(steps)} ({kind}): {goal}")
+            yield {"type": "step_log", "content": f"Step {sid}: {goal}", "step": sid}
+
+            step_prompt = (
+                f"Original question: {query}\n"
+                f"Current step ({sid}/{len(steps)}, {kind}): {goal}\n"
+                + (f"Results of prior steps:\n{step_context}\n" if step_context else "")
+                + "Write pandas code for THIS STEP ONLY, assigning the step result to `result`."
+            )
+            step_error = ""
+            step_done = False
+            for step_attempt in (1, 2):  # one scoped retry per step
+                sres = self.client.generate_code(schema, step_prompt, sample_data, step_error)
+                if "error" in sres:
+                    err = str(sres["error"])
+                    # Transient empty reply: use the scoped retry before skipping the step.
+                    if err.startswith("EMPTY_CONTENT") and step_attempt == 1:
+                        yield {"type": "step_log", "content": f"Step {sid} empty AI reply — retrying...", "step": sid}
+                        continue
+                    yield {"type": "step_log", "content": f"Step {sid} AI error, skipping...", "step": sid}
+                    break
+                scode = strip_matplotlib(sres["code"])
+                if sres.get("thinking"):
+                    yield {"type": "step_log", "content": sres["thinking"], "step": sid}
+                yield {"type": "code", "content": scode, "step": sid}
+                sexec = safe_execute_code(scode, self.df)
+                if sexec["status"] == "success":
+                    sraw = sexec["output"]
+                    sval = sexec.get("result")
+                    if isinstance(sval, (pd.DataFrame, pd.Series)) and len(sval) == 0:
+                        step_error = (
+                            f"Previous step code:\n```python\n{scode}\n```\n\n"
+                            "It ran but returned 0 rows. Re-check column names and filter "
+                            "values against the schema examples; prefer groupby over "
+                            "equality filters."
+                        )
+                        if step_attempt == 1:
+                            yield {"type": "step_log", "content": f"Step {sid} empty — retrying...", "step": sid}
+                            continue
+                    plan_raw_output = sraw
+                    chart_data = extract_chart_data(sval)
+                    if chart_data:
+                        yield {"type": "chart", "chart": chart_data, "step": sid}
+                    df_payload = extract_df_payload(sval)
+                    if df_payload:
+                        yield {"type": "data", "payload": df_payload, "step": sid}
+                    step_context += f"Step {sid} ({kind}: {goal}) result:\n{sraw[:300]}\n"
+                    step_done = True
+                    break
+                step_error = f"Previous step code:\n```python\n{scode}\n```\n\nError: {sexec.get('error', 'unknown')}"
+                if step_attempt == 1:
+                    yield {"type": "step_log", "content": f"Step {sid} error, retrying...", "step": sid}
+                else:
+                    yield {"type": "step_log", "content": f"Step {sid} failed, continuing...", "step": sid}
+            if not step_done:
+                logger.warning(f"[PLANNER] Step {sid} skipped after retries")
+
+        trace_query = query + "\nPlan trace:\n" + (step_context or "(no step produced output)")
+        try:
+            human_answer = self.client.humanize_result(trace_query, plan_raw_output)
+        except Exception as e:
+            logger.error(f"[PLANNER] Humanize failed: {e}")
+            human_answer = plan_raw_output[:2000]
+        yield {"type": "result", "answer": human_answer, "raw_data": plan_raw_output[:2000], "status": "success", "path": "planner"}
 
     def __init__(self, client: LLMClient, df: pd.DataFrame):
         self.client = client
@@ -865,8 +959,8 @@ class DataAnalysisAgent:
         sample += f"First 10 rows:\n{head.to_string()}"
         return sample
 
-    def analyze(self, query: str, schema: dict, use_router: bool = None) -> Generator[dict, None, None]:
-        """Yield SSE events. Router fast-path (optional) + code-gen with retry."""
+    def analyze(self, query: str, schema: dict, use_router: bool = None, use_planner: bool = None) -> Generator[dict, None, None]:
+        """Yield SSE events. Router fast-path + optional planner + code-gen with retry."""
         logger.info(f"[AGENT] Query: '{query}'")
         yield {"type": "thinking", "content": "Analyzing your question..."}
 
@@ -874,12 +968,14 @@ class DataAnalysisAgent:
         # Falls through to original code-gen agent on low confidence / complex.
         # use_router: True/False overrides the server default (from frontend toggle).
         router_enabled = USE_ROUTER if use_router is None else bool(use_router)
+        route_intent = "complex"  # auto planner rule reads this; set below when router runs
         if router_enabled:
             try:
                 from .router import LLMRouter, DeterministicExecutor, ROUTER_CONFIDENCE_THRESHOLD
                 route = LLMRouter(self.client).route(query, schema)
                 conf = float(route.get("confidence", 0.0) or 0.0)
                 intent = route.get("intent", "complex")
+                route_intent = intent
                 logger.info(f"[ROUTER] intent={intent} conf={conf} route={route}")
                 if intent != "complex" and conf >= ROUTER_CONFIDENCE_THRESHOLD:
                     out = DeterministicExecutor(self.df).run(route)
@@ -905,6 +1001,26 @@ class DataAnalysisAgent:
                     logger.info("[ROUTER] Low confidence/complex, using code-gen agent")
             except Exception as e:
                 logger.warning(f"[ROUTER] Fast-path failed, falling back: {e}")
+
+        # --- Planner branch: decompose complex queries into ordered pandas steps.
+        # Gate (manual OFF > manual ON > auto): only runs when the router already
+        # declined (intent == "complex") or the user forced it on. Any planner
+        # failure falls through to the plain code-gen loop — never breaks.
+        planner_enabled = USE_PLANNER if use_planner is None else bool(use_planner)
+        if planner_enabled and (use_planner is True or route_intent == "complex"):
+            try:
+                from .planner import QueryPlanner
+                plan = QueryPlanner(self.client).plan(query, schema)
+                if plan and plan.get("steps"):
+                    for _ev in self._run_plan(query, schema, plan["steps"]):
+                        yield _ev
+                    return
+                logger.info("[PLANNER] No usable plan, using standard analysis")
+            except Exception as e:
+                logger.warning(f"[PLANNER] Planner failed, falling back: {e}")
+                yield {"type": "step_log", "content": "Planner unavailable — using standard analysis..."}
+        else:
+            logger.info(f"[PLANNER] Skipped (enabled={planner_enabled}, intent={route_intent})")
 
         sample_data = self._build_sample_data()
         error_context = ""
@@ -1151,8 +1267,13 @@ class AskQuestionView(View):
             if use_router is not None:
                 use_router = bool(use_router)
 
+            # "Deep Plan" toggle: True/False forces planner on/off; None = auto rule.
+            use_planner = data.get('use_planner', None)
+            if use_planner is not None:
+                use_planner = bool(use_planner)
+
             def event_stream():
-                for event in agent.analyze(query, schema, use_router=use_router):
+                for event in agent.analyze(query, schema, use_router=use_router, use_planner=use_planner):
                     logger.debug(f"[ASK] SSE event: {event['type']}")
                     yield f"data: {json.dumps(event, cls=NumpyEncoder)}\n\n"
                 logger.info(f"[ASK] Stream complete for query: '{query}'")

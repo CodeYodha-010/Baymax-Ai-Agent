@@ -50,6 +50,15 @@
                 </div>
                 <small class='text-muted' style='font-size:0.72rem;'>ON = instant answers for simple questions. OFF = always full AI code analysis.</small>
             </div>
+            <div class='sidebar-section mt-2'>
+                <div class='form-check form-switch'>
+                    <input class='form-check-input' type='checkbox' id='plannerToggle'>
+                    <label class='form-check-label' for='plannerToggle' style='font-size:0.85rem;'>
+                        <i class='fas fa-list-check me-1'></i>Deep Plan
+                    </label>
+                </div>
+                <small class='text-muted' style='font-size:0.72rem;'>ON = step-by-step plan for complex questions. OFF = standard analysis.</small>
+            </div>
 
         </div>
         <div class='main-content'>
@@ -121,6 +130,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const typingIndicator = document.getElementById('typingIndicator');
     const askButton = document.getElementById('askButton');
     const routerToggle = document.getElementById('routerToggle');
+    const plannerToggle = document.getElementById('plannerToggle');
 
     // Restore router toggle from localStorage (default ON)
     const savedRouter = localStorage.getItem('baymax_router');
@@ -129,14 +139,53 @@ document.addEventListener('DOMContentLoaded', function() {
         localStorage.setItem('baymax_router', routerToggle.checked);
     });
 
+    // Restore planner toggle from localStorage (default OFF).
+    // ON = force planner on. OFF (unchecked) = server auto rule
+    // (planner only for complex queries). Full OFF via USE_PLANNER=False.
+    const savedPlanner = localStorage.getItem('baymax_planner');
+    if (savedPlanner !== null) plannerToggle.checked = savedPlanner === 'true';
+    plannerToggle.addEventListener('change', function() {
+        localStorage.setItem('baymax_planner', plannerToggle.checked);
+    });
+
+    function plannerTriState() {
+        // checked=true forces ON; unchecked sends null -> server auto rule.
+        return plannerToggle.checked ? true : null;
+    }
+
     function addPathBadge(agentMsg, path) {
         if (!agentMsg || !path) return;
         const badge = document.createElement('span');
-        badge.className = 'path-badge ' + (path === 'router' ? 'path-fast' : 'path-codegen');
+        const cls = path === 'router' ? 'path-fast' : (path === 'planner' ? 'path-planner' : 'path-codegen');
+        badge.className = 'path-badge ' + cls;
         badge.innerHTML = path === 'router'
             ? '<i class=\"fas fa-bolt\"></i> Fast-path'
-            : '<i class=\"fas fa-brain\"></i> Code-gen';
+            : (path === 'planner'
+                ? '<i class=\"fas fa-compass\"></i> Planned'
+                : '<i class=\"fas fa-brain\"></i> Code-gen');
         agentMsg.querySelector('.message-content').prepend(badge);
+    }
+
+    function renderPlan(agentMsg, steps) {
+        if (!agentMsg || !steps || !steps.length) return null;
+        const ol = document.createElement('ol');
+        ol.className = 'plan-steps';
+        steps.forEach(function(s) {
+            const li = document.createElement('li');
+            li.id = 'plan-step-' + s.id;
+            li.textContent = 'Step ' + s.id + ' (' + s.kind + '): ' + s.goal;
+            ol.appendChild(li);
+        });
+        agentMsg.querySelector('.message-content').appendChild(ol);
+        return ol;
+    }
+
+    function markPlanStep(sid, state) {
+        // state: 'active' | 'done' | 'failed'
+        const li = document.getElementById('plan-step-' + sid);
+        if (!li) return;
+        li.classList.remove('active', 'done', 'failed');
+        if (state) li.classList.add(state);
     }
 
     form.addEventListener('submit', async function(e) {
@@ -154,7 +203,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const response = await fetch('{% url "ask" %}', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
-                body: JSON.stringify({ query: question, use_router: routerToggle.checked })
+                body: JSON.stringify({ query: question, use_router: routerToggle.checked, use_planner: plannerTriState() })
             });
             if (!response.ok) throw new Error('Server error: ' + response.status);
 
